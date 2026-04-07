@@ -367,6 +367,10 @@ SETTINGS_LABELS: dict[str, str] = {
     "heartbeat_interval_s": "מרווח דופק עובד (שניות)",
 }
 
+TOGGLE_SETTINGS: dict[str, str] = {
+    "group_media": "קיבוץ תמונות/סרטונים לאלבום (עד 10)",
+}
+
 EDITABLE_SETTINGS = list(SETTINGS_LABELS.keys())
 
 
@@ -375,6 +379,10 @@ def settings_text(settings: dict[str, str]) -> str:
     for key, label in SETTINGS_LABELS.items():
         val = settings.get(key, "—")
         lines.append(f"• {label}: <b>{_esc(val)}</b>")
+    for key, label in TOGGLE_SETTINGS.items():
+        is_on = settings.get(key, "1") == "1"
+        status = "✅ פעיל" if is_on else "❌ כבוי"
+        lines.append(f"• {label}: <b>{status}</b>")
     return "\n".join(lines)
 
 

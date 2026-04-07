@@ -306,6 +306,10 @@ def kb_settings(settings: dict[str, str]) -> InlineKeyboardMarkup:
         label = texts.SETTINGS_LABELS.get(key, key)
         val = settings.get(key, "—")
         rows.append([_btn(f"{label}: {val}", f"cfg:{key}")])
+    for key, label in texts.TOGGLE_SETTINGS.items():
+        is_on = settings.get(key, "1") == "1"
+        icon = "✅" if is_on else "❌"
+        rows.append([_btn(f"{icon} {label}", f"cfg:{key}")])
     rows.append([_btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 

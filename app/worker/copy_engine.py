@@ -38,6 +38,7 @@ class CopyEngine:
         from app.repositories import state_repo
         settings = state_repo.get_settings_dict()
         self._rate_limiter.update_from_settings(settings)
+        group_media: bool = settings.get("group_media", "1") == "1"
 
         # Snapshot blocked words once at job start
         blocked_words: list[str] = []
@@ -105,6 +106,72 @@ class CopyEngine:
         pending_group: list[Message] = []
         current_group_id: Optional[int] = None
 
+        # Buffer for grouping individually-sent photos/videos into albums (group_media feature)
+        solo_media_buffer: list[Message] = []
+
+        async def flush_solo_media() -> None:
+            nonlocal copied, skipped, failed, solo_media_buffer, src_is_protected
+            if not solo_media_buffer:
+                return
+            buffer = solo_media_buffer[:]
+            solo_media_buffer = []
+            last_id = buffer[-1].id
+
+            # Apply per-message filters; collect messages that should be sent
+            allowed_types: set[str] = set((job.content_types or "text,image,video").split(","))
+            to_send: list[Message] = []
+            for m in buffer:
+                if blocked_words and self._is_blocked(m, blocked_words):
+                    job_repo.record_copied_message(job.id, m.id, None, "skipped", "blocked_word")
+                    already_done.add(m.id)
+                    skipped += 1
+                    continue
+                if allowed_types != {"image", "text", "video"}:
+                    msg_type = self._get_content_type(m)
+                    if msg_type != "other" and msg_type not in allowed_types:
+                        job_repo.record_copied_message(job.id, m.id, None, "skipped", f"content_type:{msg_type}")
+                        already_done.add(m.id)
+                        skipped += 1
+                        continue
+                to_send.append(m)
+
+            if not to_send:
+                job_repo.update_progress(job.id, copied, skipped, failed, last_id)
+                return
+
+            if len(to_send) == 1:
+                m = to_send[0]
+                try:
+                    await self._send_as_copy(m, dst_entity)
+                    status, reason = "copied", None
+                    copied += 1
+                except FloodWaitError:
+                    raise
+                except Exception as e:
+                    status, reason = "failed", str(e)[:200]
+                    failed += 1
+                job_repo.record_copied_message(job.id, m.id, None, status, reason)
+                already_done.add(m.id)
+            else:
+                try:
+                    await self._send_group_as_copy(to_send, dst_entity)
+                    for m in to_send:
+                        job_repo.record_copied_message(job.id, m.id, None, "copied", None)
+                        already_done.add(m.id)
+                        copied += 1
+                    logger.debug("Job #%d: grouped %d solo media into album", job.id, len(to_send))
+                except FloodWaitError:
+                    raise
+                except Exception as e:
+                    err = str(e)[:200]
+                    for m in to_send:
+                        job_repo.record_copied_message(job.id, m.id, None, "failed", err)
+                        already_done.add(m.id)
+                        failed += 1
+
+            job_repo.update_progress(job.id, copied, skipped, failed, last_id)
+            await self._rate_limiter.wait()
+
         async def flush_group() -> None:
             nonlocal copied, skipped, failed, pending_group, current_group_id, src_is_protected
             if not pending_group:
@@ -147,46 +214,60 @@ class CopyEngine:
                     continue
 
                 if msg.grouped_id:
+                    # Existing album: flush solo buffer first, then accumulate
+                    if group_media:
+                        await flush_solo_media()
                     if msg.grouped_id == current_group_id:
-                        # Continue accumulating the same album
                         pending_group.append(msg)
                     else:
-                        # New album starts — flush previous group first
                         await flush_group()
                         current_group_id = msg.grouped_id
                         pending_group = [msg]
                 else:
-                    # Not part of an album — flush any pending group, then handle solo
+                    # Individual message: flush any pending album group first
                     await flush_group()
 
-                    if msg.id in already_done:
-                        continue
-
-                    status, skip_reason, src_is_protected = await self._process_message(
-                        job, msg, blocked_words, src_entity, dst_entity, src_is_protected
-                    )
-
-                    job_repo.record_copied_message(
-                        job_id=job.id,
-                        source_message_id=msg.id,
-                        dest_message_id=None,
-                        status=status,
-                        skip_reason=skip_reason,
-                    )
-                    already_done.add(msg.id)
-
-                    if status == "copied":
-                        copied += 1
-                    elif status == "skipped":
-                        skipped += 1
+                    if group_media and self._is_groupable(msg):
+                        # Add to solo buffer (skip if already done)
+                        if msg.id not in already_done:
+                            solo_media_buffer.append(msg)
+                        if len(solo_media_buffer) >= 10:
+                            await flush_solo_media()
                     else:
-                        failed += 1
+                        # Non-groupable: flush solo buffer, then process normally
+                        if group_media:
+                            await flush_solo_media()
 
-                    job_repo.update_progress(job.id, copied, skipped, failed, msg.id)
-                    await self._rate_limiter.wait()
+                        if msg.id in already_done:
+                            continue
 
-            # Flush any remaining album at end of stream
+                        status, skip_reason, src_is_protected = await self._process_message(
+                            job, msg, blocked_words, src_entity, dst_entity, src_is_protected
+                        )
+
+                        job_repo.record_copied_message(
+                            job_id=job.id,
+                            source_message_id=msg.id,
+                            dest_message_id=None,
+                            status=status,
+                            skip_reason=skip_reason,
+                        )
+                        already_done.add(msg.id)
+
+                        if status == "copied":
+                            copied += 1
+                        elif status == "skipped":
+                            skipped += 1
+                        else:
+                            failed += 1
+
+                        job_repo.update_progress(job.id, copied, skipped, failed, msg.id)
+                        await self._rate_limiter.wait()
+
+            # Flush any remaining buffers at end of stream
             await flush_group()
+            if group_media:
+                await flush_solo_media()
 
         except FloodWaitError:
             logger.warning("Job #%d: FloodWait encountered", job.id)
@@ -468,6 +549,23 @@ class CopyEngine:
     def _is_blocked(self, msg: Message, blocked_words: list[str]) -> bool:
         text = (msg.text or "").lower()
         return any(word in text for word in blocked_words)
+
+    @staticmethod
+    def _is_groupable(msg: Message) -> bool:
+        """True if this message can be added to a Telegram media album (photo or video)."""
+        if not msg.media or isinstance(msg.media, MessageMediaUnsupported):
+            return False
+        type_name = msg.media.__class__.__name__
+        if type_name == "MessageMediaPhoto":
+            return True
+        if type_name == "MessageMediaDocument":
+            doc = msg.media.document
+            if doc:
+                for attr in doc.attributes:
+                    cls = attr.__class__.__name__
+                    if cls in ("DocumentAttributeVideo", "DocumentAttributeAnimated"):
+                        return True
+        return False
 
     @staticmethod
     def _get_content_type(msg: Message) -> str:

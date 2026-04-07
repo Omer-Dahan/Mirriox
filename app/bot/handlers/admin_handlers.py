@@ -87,7 +87,12 @@ async def dispatch_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update_main_message(context, text, kb)
     elif data.startswith("cfg:"):
         key = data[4:]
-        if key in texts.EDITABLE_SETTINGS:
+        if key in texts.TOGGLE_SETTINGS:
+            current = state_repo.get_setting(key) or "1"
+            state_repo.set_setting(key, "0" if current == "1" else "1")
+            text, kb = renderer.render_settings()
+            await update_main_message(context, text, kb)
+        elif key in texts.EDITABLE_SETTINGS:
             context.user_data["awaiting_input"] = "setting_value"  # type: ignore[index]
             context.user_data["setting_key"] = key  # type: ignore[index]
             await update_main_message(

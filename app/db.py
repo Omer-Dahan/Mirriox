@@ -169,6 +169,7 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         "batch_size_max":     "100",
         "batch_pause_min_s":  "60",
         "batch_pause_max_s":  "120",
+        "group_media":        "1",
     })
 
 
