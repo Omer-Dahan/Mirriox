@@ -34,6 +34,15 @@ class Source:
     resolved_id: Optional[int]
     created_at: str
     validation_error: Optional[str] = None
+    username: Optional[str] = None
+    participants_count: Optional[int] = None
+    about: Optional[str] = None
+    verified: bool = False
+    channel_type: Optional[str] = None
+    total_messages: Optional[int] = None
+    photos_count: Optional[int] = None
+    videos_count: Optional[int] = None
+    docs_count: Optional[int] = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Source":
@@ -46,6 +55,15 @@ class Source:
             resolved_id=row["resolved_id"],
             created_at=row["created_at"],
             validation_error=row["validation_error"] if "validation_error" in keys else None,
+            username=row["username"] if "username" in keys else None,
+            participants_count=row["participants_count"] if "participants_count" in keys else None,
+            about=row["about"] if "about" in keys else None,
+            verified=bool(row["verified"]) if "verified" in keys else False,
+            channel_type=row["channel_type"] if "channel_type" in keys else None,
+            total_messages=row["total_messages"] if "total_messages" in keys else None,
+            photos_count=row["photos_count"] if "photos_count" in keys else None,
+            videos_count=row["videos_count"] if "videos_count" in keys else None,
+            docs_count=row["docs_count"] if "docs_count" in keys else None,
         )
 
     def display(self) -> str:
@@ -64,6 +82,15 @@ class Destination:
     resolved_id: Optional[int]
     created_at: str
     validation_error: Optional[str] = None
+    username: Optional[str] = None
+    participants_count: Optional[int] = None
+    about: Optional[str] = None
+    verified: bool = False
+    channel_type: Optional[str] = None
+    total_messages: Optional[int] = None
+    photos_count: Optional[int] = None
+    videos_count: Optional[int] = None
+    docs_count: Optional[int] = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Destination":
@@ -76,6 +103,15 @@ class Destination:
             resolved_id=row["resolved_id"],
             created_at=row["created_at"],
             validation_error=row["validation_error"] if "validation_error" in keys else None,
+            username=row["username"] if "username" in keys else None,
+            participants_count=row["participants_count"] if "participants_count" in keys else None,
+            about=row["about"] if "about" in keys else None,
+            verified=bool(row["verified"]) if "verified" in keys else False,
+            channel_type=row["channel_type"] if "channel_type" in keys else None,
+            total_messages=row["total_messages"] if "total_messages" in keys else None,
+            photos_count=row["photos_count"] if "photos_count" in keys else None,
+            videos_count=row["videos_count"] if "videos_count" in keys else None,
+            docs_count=row["docs_count"] if "docs_count" in keys else None,
         )
 
     def display(self) -> str:

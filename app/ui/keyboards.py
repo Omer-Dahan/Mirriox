@@ -76,7 +76,12 @@ def kb_job_detail(job: "Job") -> InlineKeyboardMarkup:
         rows.append([_btn(texts.BTN_DELETE_JOB, f"job:{job.id}:confirm_delete")])
 
     if job.status in ("pending", "running", "waiting_retry"):
+        rows.append([_btn(texts.BTN_PAUSE_JOB, f"job:{job.id}:pause")])
         rows.append([_btn(texts.BTN_CANCEL_JOB, f"job:{job.id}:confirm_cancel")])
+
+    if job.status == "paused":
+        rows.append([_btn(texts.BTN_RESUME_JOB, f"job:{job.id}:resume")])
+        rows.append([_btn(texts.BTN_DELETE_JOB, f"job:{job.id}:confirm_delete")])
 
     if job.is_terminal():
         rows.append([_btn(texts.BTN_DELETE_JOB, f"job:{job.id}:confirm_delete")])
@@ -195,6 +200,7 @@ def kb_source_list(sources: list["Source"], page: int = 0) -> InlineKeyboardMark
 
 def kb_source_detail(source_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [_btn(texts.BTN_REFRESH + " מידע", f"src:{source_id}:refresh_info")],
         [_btn(texts.BTN_DELETE, f"src:{source_id}:confirm_delete")],
         [_btn(texts.BTN_BACK, "menu:sources")],
     ])
@@ -223,6 +229,7 @@ def kb_dest_list(dests: list["Destination"], page: int = 0) -> InlineKeyboardMar
 
 def kb_dest_detail(dest_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [_btn(texts.BTN_REFRESH + " מידע", f"dst:{dest_id}:refresh_info")],
         [_btn(texts.BTN_DELETE, f"dst:{dest_id}:confirm_delete")],
         [_btn(texts.BTN_BACK, "menu:destinations")],
     ])

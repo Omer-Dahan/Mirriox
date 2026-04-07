@@ -167,6 +167,30 @@ def increment_retry(job_id: int) -> int:
     return row["retry_count"] if row else 0
 
 
+def pause_job(job_id: int) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE jobs SET status='paused', last_updated_at=datetime('now') WHERE id=? AND status IN ('running','pending','waiting_retry')",
+        (job_id,),
+    )
+    conn.commit()
+
+
+def resume_job(job_id: int) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE jobs SET status='pending', last_updated_at=datetime('now') WHERE id=? AND status='paused'",
+        (job_id,),
+    )
+    conn.commit()
+
+
+def is_paused(job_id: int) -> bool:
+    conn = db.get_connection()
+    row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+    return bool(row and row["status"] == "paused")
+
+
 def delete(job_id: int) -> bool:
     conn = db.get_connection()
     cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))

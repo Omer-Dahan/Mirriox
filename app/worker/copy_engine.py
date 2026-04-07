@@ -101,6 +101,8 @@ class CopyEngine:
         copied = job.copied_count
         skipped = job.skipped_count
         failed = job.failed_count
+        _last_progress_log = copied
+        _msgs_since_pause_check = 0  # check for pause every 25 messages
 
         # Buffer for collecting media-group messages before forwarding them together
         pending_group: list[Message] = []
@@ -141,10 +143,31 @@ class CopyEngine:
 
             if len(to_send) == 1:
                 m = to_send[0]
+                status, reason = "failed", None
                 try:
-                    await self._send_as_copy(m, dst_entity)
+                    if src_is_protected:
+                        await self._send_as_copy(m, dst_entity)
+                    else:
+                        await self._client(ForwardMessagesRequest(
+                            from_peer=src_entity,
+                            id=[m.id],
+                            to_peer=dst_entity,
+                            drop_author=True,
+                            random_id=[random.randint(0, 2**63)],
+                        ))
                     status, reason = "copied", None
                     copied += 1
+                except ChatForwardsRestrictedError:
+                    src_is_protected = True
+                    try:
+                        await self._send_as_copy(m, dst_entity)
+                        status, reason = "copied", None
+                        copied += 1
+                    except FloodWaitError:
+                        raise
+                    except Exception as e:
+                        status, reason = "failed", str(e)[:200]
+                        failed += 1
                 except FloodWaitError:
                     raise
                 except Exception as e:
@@ -170,6 +193,9 @@ class CopyEngine:
                         failed += 1
 
             job_repo.update_progress(job.id, copied, skipped, failed, last_id)
+            if job_repo.is_paused(job.id):
+                logger.info("Job #%d: pause requested after media flush at #%d", job.id, last_id)
+                return
             await self._rate_limiter.wait()
 
         async def flush_group() -> None:
@@ -262,6 +288,19 @@ class CopyEngine:
                             failed += 1
 
                         job_repo.update_progress(job.id, copied, skipped, failed, msg.id)
+                        if copied - _last_progress_log >= 50:
+                            _last_progress_log = copied
+                            logger.info(
+                                "Job #%d progress: copied=%d skipped=%d failed=%d last_id=#%d",
+                                job.id, copied, skipped, failed, msg.id,
+                            )
+                        _msgs_since_pause_check += 1
+                        if _msgs_since_pause_check >= 25:
+                            _msgs_since_pause_check = 0
+                            if job_repo.is_paused(job.id):
+                                logger.info("Job #%d: pause requested — stopping at msg #%d", job.id, msg.id)
+                                job_repo.update_progress(job.id, copied, skipped, failed, msg.id)
+                                return
                         await self._rate_limiter.wait()
 
             # Flush any remaining buffers at end of stream
@@ -526,11 +565,62 @@ class CopyEngine:
 
         await self._client.send_file(dst_entity, file_bytes, caption=text or None)
 
+    async def _send_group_by_ref(self, group: list[Message], dst_entity) -> None:
+        """
+        Send a media album using existing Telegram file references — no download needed.
+        Falls back to _send_group_as_copy if references are expired or inaccessible.
+        """
+        from telethon.tl.functions.messages import SendMultiMediaRequest
+        from telethon.tl.types import (
+            InputSingleMedia, InputMediaPhoto, InputMediaDocument,
+            InputPhoto, InputDocument,
+        )
+
+        multi: list = []
+        for m in group:
+            if not m.media or isinstance(m.media, MessageMediaUnsupported):
+                continue
+            type_name = m.media.__class__.__name__
+            caption = m.text or ""
+            if type_name == "MessageMediaPhoto":
+                p = m.media.photo
+                input_media = InputMediaPhoto(
+                    id=InputPhoto(id=p.id, access_hash=p.access_hash, file_reference=p.file_reference)
+                )
+            elif type_name == "MessageMediaDocument":
+                d = m.media.document
+                input_media = InputMediaDocument(
+                    id=InputDocument(id=d.id, access_hash=d.access_hash, file_reference=d.file_reference)
+                )
+            else:
+                continue
+            multi.append(InputSingleMedia(
+                media=input_media,
+                random_id=random.randint(0, 2**63),
+                message=caption,
+            ))
+
+        if not multi:
+            return
+
+        await self._client(SendMultiMediaRequest(peer=dst_entity, multi_media=multi))
+
     async def _send_group_as_copy(self, group: list[Message], dst_entity) -> None:
-        """Download and re-upload a media album (used when forwarding is blocked)."""
+        """
+        Send a media group by trying file references first (fast), then
+        falling back to download+reupload (slow, used when refs are expired).
+        """
+        try:
+            await self._send_group_by_ref(group, dst_entity)
+            return
+        except FloodWaitError:
+            raise
+        except Exception as e:
+            logger.debug("send_group_by_ref failed (%s) — falling back to download+upload", e)
+
+        # Fallback: download and re-upload
         files: list[bytes] = []
         captions: list[str] = []
-
         for m in group:
             if m.media and not isinstance(m.media, MessageMediaUnsupported):
                 data: Optional[bytes] = await self._client.download_media(m, file=bytes)

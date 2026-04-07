@@ -25,6 +25,8 @@ from app.bot.handlers import (
 from app.ui import renderer
 from app.bot.handlers._common import update_main_message, answer_callback
 
+_AUTO_REFRESH_INTERVAL_S = 30
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,6 +89,9 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return  # silent — act as if offline
 
     data: str = update.callback_query.data or ""
+
+    # Track whether the main menu is currently displayed
+    context.bot_data["on_main_screen"] = (data == "menu:main")
 
     try:
         if data == "menu:main":
@@ -189,11 +194,31 @@ async def handle_unauthorized(
 
 # ── Application factory ────────────────────────────────────────────────────────
 
+async def _auto_refresh_main_menu(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Periodically refreshes the main control message — only when main menu is visible."""
+    if not context.bot_data.get("on_main_screen", False):
+        return
+    from app.repositories import job_repo
+    active = job_repo.get_active_job()
+    if active is None:
+        return
+    text, kb = renderer.render_main_menu()
+    await update_main_message(context, text, kb)
+
+
 def build_application(config: Config) -> Application:
     app = Application.builder().token(config.BOT_TOKEN).build()
 
     # Store bootstrap admin IDs for handlers to access
     app.bot_data["admin_ids"] = config.ADMIN_IDS
+
+    # Auto-refresh main menu every 30s when a job is active
+    if app.job_queue:
+        app.job_queue.run_repeating(
+            _auto_refresh_main_menu,
+            interval=_AUTO_REFRESH_INTERVAL_S,
+            first=_AUTO_REFRESH_INTERVAL_S,
+        )
 
     # /start — always allowed; creates fresh main message
     app.add_handler(

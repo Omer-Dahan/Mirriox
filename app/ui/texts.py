@@ -12,7 +12,7 @@ STATUS_LABELS: dict[str, str] = {
     "draft":         "📝 טיוטה",
     "pending":       "⏳ ממתין לביצוע",
     "running":       "▶️ פועל",
-    "paused":        "⏸ מושהה",
+    "paused":        "⏸ מושהית",
     "completed":     "✅ הושלם",
     "cancelled":     "🚫 בוטל",
     "failed":        "❌ נכשל",
@@ -50,6 +50,8 @@ BTN_DELETE          = "🗑 מחק"
 BTN_REFRESH         = "🔄 רענן"
 BTN_ADD             = "➕ הוסף"
 BTN_SUBMIT_JOB      = "▶️ הגש להרצה"
+BTN_PAUSE_JOB       = "⏸ השהה משימה"
+BTN_RESUME_JOB      = "▶️ המשך משימה"
 BTN_CANCEL_JOB      = "⏹ בטל משימה"
 BTN_DELETE_JOB      = "🗑 מחק משימה"
 BTN_YES_DELETE      = "✅ כן, מחק"
@@ -102,11 +104,7 @@ def main_menu_text(worker_status: str, active_job: "Job | None") -> str:
 def jobs_list_text(jobs: list["Job"]) -> str:
     if not jobs:
         return f"{TITLE_JOBS}\n\nאין משימות עדיין."
-    lines = [f"{TITLE_JOBS}\n"]
-    for job in jobs:
-        status_label = STATUS_LABELS.get(job.status, job.status)
-        lines.append(f"• <b>{_esc(job.name)}</b> — {status_label}")
-    return "\n".join(lines)
+    return f"{TITLE_JOBS}\n\nבחר משימה מהרשימה:"
 
 
 # ── Job detail ─────────────────────────────────────────────────────────────────
@@ -266,11 +264,7 @@ def wizard_summary_text(partial: dict, word_count: int) -> str:
 def source_list_text(sources: list["Source"]) -> str:
     if not sources:
         return f"{TITLE_SOURCES}\n\nלא הוגדרו מקורות עדיין."
-    lines = [f"{TITLE_SOURCES}\n"]
-    for s in sources:
-        title = s.title or s.channel_ref
-        lines.append(f"• <b>{_esc(s.name)}</b> — {_esc(title)}")
-    return "\n".join(lines)
+    return f"{TITLE_SOURCES}\n\nבחר מקור מהרשימה:"
 
 
 def source_detail_text(source: "Source") -> str:
@@ -279,11 +273,11 @@ def source_detail_text(source: "Source") -> str:
     status = "✅ נגיש" if source.resolved_id else ("❌ " + _esc(source.validation_error) if source.validation_error else "⏳ טרם אומת")
     return (
         f"{TITLE_SOURCE_DETAIL}: <b>{_esc(source.name)}</b>\n\n"
-        f"כינוי: {_esc(source.name)}\n"
         f"הפניה: <code>{_esc(source.channel_ref)}</code>\n"
         f"כותרת: {_esc(title)}\n"
         f"מזהה: {rid}\n"
         f"גישה: {status}\n"
+        + _channel_extra_lines(source) +
         f"נוסף: {_fmt_dt(source.created_at)}"
     )
 
@@ -291,11 +285,7 @@ def source_detail_text(source: "Source") -> str:
 def dest_list_text(dests: list["Destination"]) -> str:
     if not dests:
         return f"{TITLE_DESTINATIONS}\n\nלא הוגדרו יעדים עדיין."
-    lines = [f"{TITLE_DESTINATIONS}\n"]
-    for d in dests:
-        title = d.title or d.channel_ref
-        lines.append(f"• <b>{_esc(d.name)}</b> — {_esc(title)}")
-    return "\n".join(lines)
+    return f"{TITLE_DESTINATIONS}\n\nבחר יעד מהרשימה:"
 
 
 def dest_detail_text(dest: "Destination") -> str:
@@ -304,13 +294,44 @@ def dest_detail_text(dest: "Destination") -> str:
     status = "✅ נגיש" if dest.resolved_id else ("❌ " + _esc(dest.validation_error) if dest.validation_error else "⏳ טרם אומת")
     return (
         f"{TITLE_DEST_DETAIL}: <b>{_esc(dest.name)}</b>\n\n"
-        f"כינוי: {_esc(dest.name)}\n"
         f"הפניה: <code>{_esc(dest.channel_ref)}</code>\n"
         f"כותרת: {_esc(title)}\n"
         f"מזהה: {rid}\n"
         f"גישה: {status}\n"
+        + _channel_extra_lines(dest) +
         f"נוסף: {_fmt_dt(dest.created_at)}"
     )
+
+
+def _channel_extra_lines(ch) -> str:
+    """Build extra-info lines for a Source or Destination. Returns a string ending with \n."""
+    lines = ""
+    if ch.channel_type:
+        lines += f"סוג: {_esc(ch.channel_type)}"
+        if ch.verified:
+            lines += " ✅ מאומת"
+        lines += "\n"
+    if ch.username:
+        lines += f"@: @{_esc(ch.username)}\n"
+    if ch.participants_count is not None:
+        lines += f"👥 מנויים: {ch.participants_count:,}\n"
+    if ch.about:
+        about_short = ch.about[:120] + ("…" if len(ch.about) > 120 else "")
+        lines += f"📝 תיאור: {_esc(about_short)}\n"
+    if ch.total_messages is not None or ch.photos_count is not None:
+        stats = []
+        if ch.total_messages is not None:
+            stats.append(f"📨 {ch.total_messages:,} הודעות")
+        if ch.photos_count is not None:
+            stats.append(f"🖼 {ch.photos_count:,} תמונות")
+        if ch.videos_count is not None:
+            stats.append(f"🎬 {ch.videos_count:,} סרטונים")
+        if ch.docs_count is not None:
+            stats.append(f"📁 {ch.docs_count:,} קבצים")
+        lines += " | ".join(stats) + "\n"
+    if lines:
+        lines = "\n" + lines + "\n"
+    return lines
 
 
 PROMPT_SOURCE_NAME = f"{TITLE_SOURCES}\n\nשלב 1 — הזן שם כינוי למקור:"

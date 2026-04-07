@@ -1,6 +1,7 @@
 """Handlers for source and destination management screens."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -10,6 +11,7 @@ from app.repositories import source_repo
 from app.services import validation_service
 from app.ui import renderer, texts, keyboards
 from app.bot.handlers._common import update_main_message, answer_callback, delete_user_message
+from app.worker import worker_main as _worker
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,24 @@ async def _dispatch_src_action(
 ) -> None:
     if action == "view":
         text, kb = renderer.render_source_detail(src_id)
+        await update_main_message(context, text, kb)
+    elif action == "refresh_info":
+        src = source_repo.get_source_by_id(src_id)
+        if src:
+            source_repo.reset_source_for_refresh(src_id)
+            _worker.signal_resolve_now()
+            # Show loading state
+            loading_text = f"{texts.TITLE_SOURCE_DETAIL}: <b>{texts._esc(src.name)}</b>\n\n⏳ מאחזר מידע…"
+            await update_main_message(context, loading_text, renderer.render_source_detail(src_id)[1])
+            # Wait for worker to finish fetching (up to 5 seconds)
+            for _ in range(5):
+                await asyncio.sleep(1)
+                updated = source_repo.get_source_by_id(src_id)
+                if updated and updated.resolved_id:
+                    break
+            text, kb = renderer.render_source_detail(src_id)
+        else:
+            text, kb = renderer.render_error("מקור לא נמצא", "sources")
         await update_main_message(context, text, kb)
     elif action == "confirm_delete":
         src = source_repo.get_source_by_id(src_id)
@@ -91,6 +111,24 @@ async def _dispatch_dst_action(
     if action == "view":
         text, kb = renderer.render_dest_detail(dst_id)
         await update_main_message(context, text, kb)
+    elif action == "refresh_info":
+        dst = source_repo.get_destination_by_id(dst_id)
+        if dst:
+            source_repo.reset_destination_for_refresh(dst_id)
+            _worker.signal_resolve_now()
+            # Show loading state
+            loading_text = f"{texts.TITLE_DEST_DETAIL}: <b>{texts._esc(dst.name)}</b>\n\n⏳ מאחזר מידע…"
+            await update_main_message(context, loading_text, renderer.render_dest_detail(dst_id)[1])
+            # Wait for worker to finish fetching (up to 5 seconds)
+            for _ in range(5):
+                await asyncio.sleep(1)
+                updated = source_repo.get_destination_by_id(dst_id)
+                if updated and updated.resolved_id:
+                    break
+            text, kb = renderer.render_dest_detail(dst_id)
+        else:
+            text, kb = renderer.render_error("יעד לא נמצא", "destinations")
+        await update_main_message(context, text, kb)
     elif action == "confirm_delete":
         dest = source_repo.get_destination_by_id(dst_id)
         if dest:
@@ -129,6 +167,7 @@ async def handle_source_ref(
         ref = validation_service.validate_channel_ref(raw)
         # Name = ref for now; worker will update it with the real title
         source_repo.add_source(ref, ref)
+        _worker.signal_resolve_now()
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
         text, kb = renderer.render_source_list()
     except ValidationError as e:
@@ -146,6 +185,7 @@ async def handle_dest_ref(
         ref = validation_service.validate_channel_ref(raw)
         # Name = ref for now; worker will update it with the real title
         source_repo.add_destination(ref, ref)
+        _worker.signal_resolve_now()
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
         text, kb = renderer.render_dest_list()
     except ValidationError as e:

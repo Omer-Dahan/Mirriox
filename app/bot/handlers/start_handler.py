@@ -48,4 +48,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     state_repo.set_setting("main_chat_id", str(chat_id))
     state_repo.set_setting("main_message_id", str(msg.message_id))
 
+    # Mark that main menu is currently visible
+    context.bot_data["on_main_screen"] = True
+
     logger.info("Main control message created: chat=%d msg=%d", chat_id, msg.message_id)

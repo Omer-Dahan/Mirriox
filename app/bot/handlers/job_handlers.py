@@ -74,6 +74,10 @@ async def _dispatch_job_action(
         await _job_confirm_cancel(update, context, job_id)
     elif action == "cancel":
         await _job_cancel(update, context, job_id)
+    elif action == "pause":
+        await _job_pause(update, context, job_id)
+    elif action == "resume":
+        await _job_resume(update, context, job_id)
 
 
 # ── Job list ───────────────────────────────────────────────────────────────────
@@ -139,6 +143,30 @@ async def _job_cancel(
         text, kb = renderer.render_job_detail(job_id)
     except JobError as e:
         text, kb = renderer.render_error(str(e), "jobs")
+    await update_main_message(context, text, kb)
+
+
+async def _job_pause(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, job_id: int
+) -> None:
+    from app.repositories import job_repo
+    job = job_repo.get_by_id(job_id)
+    if job and job.status in ("pending", "running", "waiting_retry"):
+        job_repo.pause_job(job_id)
+        logger.info("Job #%d paused by user", job_id)
+    text, kb = renderer.render_job_detail(job_id)
+    await update_main_message(context, text, kb)
+
+
+async def _job_resume(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, job_id: int
+) -> None:
+    from app.repositories import job_repo
+    job = job_repo.get_by_id(job_id)
+    if job and job.status == "paused":
+        job_repo.resume_job(job_id)
+        logger.info("Job #%d resumed by user", job_id)
+    text, kb = renderer.render_job_detail(job_id)
     await update_main_message(context, text, kb)
 
 

@@ -42,6 +42,20 @@ def add_source(name: str, channel_ref: str) -> Source:
     return get_source_by_id(cur.lastrowid)  # type: ignore[arg-type]
 
 
+def reset_source_for_refresh(source_id: int) -> None:
+    """Clear resolved_id so the worker re-fetches full channel info."""
+    conn = db.get_connection()
+    conn.execute("UPDATE sources SET resolved_id = NULL WHERE id = ?", (source_id,))
+    conn.commit()
+
+
+def reset_destination_for_refresh(dest_id: int) -> None:
+    """Clear resolved_id so the worker re-fetches full channel info."""
+    conn = db.get_connection()
+    conn.execute("UPDATE destinations SET resolved_id = NULL WHERE id = ?", (dest_id,))
+    conn.commit()
+
+
 def update_source_name(source_id: int, name: str) -> None:
     conn = db.get_connection()
     conn.execute("UPDATE sources SET name = ? WHERE id = ?", (name, source_id))
@@ -55,6 +69,31 @@ def update_source_resolved(
     conn.execute(
         "UPDATE sources SET title = ?, resolved_id = ? WHERE id = ?",
         (title, resolved_id, source_id),
+    )
+    conn.commit()
+
+
+def update_source_extra_info(
+    source_id: int,
+    username: Optional[str],
+    participants_count: Optional[int],
+    about: Optional[str],
+    verified: bool,
+    channel_type: Optional[str],
+    total_messages: Optional[int],
+    photos_count: Optional[int],
+    videos_count: Optional[int],
+    docs_count: Optional[int],
+) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        """UPDATE sources SET
+            username=?, participants_count=?, about=?, verified=?,
+            channel_type=?, total_messages=?, photos_count=?, videos_count=?, docs_count=?
+           WHERE id=?""",
+        (username, participants_count, about, int(verified),
+         channel_type, total_messages, photos_count, videos_count, docs_count,
+         source_id),
     )
     conn.commit()
 
@@ -151,6 +190,31 @@ def update_destination_resolved(
     conn.execute(
         "UPDATE destinations SET title = ?, resolved_id = ? WHERE id = ?",
         (title, resolved_id, dest_id),
+    )
+    conn.commit()
+
+
+def update_destination_extra_info(
+    dest_id: int,
+    username: Optional[str],
+    participants_count: Optional[int],
+    about: Optional[str],
+    verified: bool,
+    channel_type: Optional[str],
+    total_messages: Optional[int],
+    photos_count: Optional[int],
+    videos_count: Optional[int],
+    docs_count: Optional[int],
+) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        """UPDATE destinations SET
+            username=?, participants_count=?, about=?, verified=?,
+            channel_type=?, total_messages=?, photos_count=?, videos_count=?, docs_count=?
+           WHERE id=?""",
+        (username, participants_count, about, int(verified),
+         channel_type, total_messages, photos_count, videos_count, docs_count,
+         dest_id),
     )
     conn.commit()
 

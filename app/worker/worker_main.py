@@ -21,6 +21,14 @@ from app.worker.copy_engine import CopyEngine
 logger = logging.getLogger(__name__)
 
 _shutdown_event: asyncio.Event | None = None
+_resolve_trigger: asyncio.Event | None = None
+
+
+def signal_resolve_now() -> None:
+    """Called from bot handlers to wake the worker for immediate channel resolution."""
+    global _resolve_trigger
+    if _resolve_trigger is not None:
+        _resolve_trigger.set()
 
 
 def run(config: Config) -> None:
@@ -34,8 +42,9 @@ async def run_async(config: Config) -> None:
 
 
 async def _async_run(config: Config) -> None:
-    global _shutdown_event
+    global _shutdown_event, _resolve_trigger
     _shutdown_event = asyncio.Event()
+    _resolve_trigger = asyncio.Event()
 
     # Register signal handlers for graceful shutdown
     loop = asyncio.get_event_loop()
@@ -55,6 +64,7 @@ async def _async_run(config: Config) -> None:
         config.TELETHON_SESSION,
         config.TELETHON_API_ID,
         config.TELETHON_API_HASH,
+        flood_sleep_threshold=0,  # Never auto-sleep — always raise FloodWaitError so we can log and requeue
     )
 
     logger.info("Connecting to Telegram as userbot...")
@@ -189,6 +199,8 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                     await _sleep_or_shutdown(5)
             else:
                 state_repo.heartbeat()
+                if _resolve_trigger is not None:
+                    _resolve_trigger.clear()
                 await _resolve_pending_channels(client)
                 await _sleep_or_shutdown(poll_interval)
 
@@ -201,15 +213,18 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
 
 
 async def _sleep_or_shutdown(seconds: float) -> None:
-    """Sleep for the given duration, waking early if shutdown is requested."""
+    """Sleep for the given duration, waking early if shutdown or resolve trigger fires."""
     assert _shutdown_event is not None
-    try:
-        await asyncio.wait_for(
-            asyncio.shield(_shutdown_event.wait()),
-            timeout=seconds,
-        )
-    except asyncio.TimeoutError:
-        pass
+    waiters = {asyncio.ensure_future(_shutdown_event.wait())}
+    if _resolve_trigger is not None:
+        waiters.add(asyncio.ensure_future(_resolve_trigger.wait()))
+    done, pending = await asyncio.wait(waiters, timeout=seconds, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
 
 
 def _request_shutdown() -> None:
@@ -299,6 +314,8 @@ async def _resolve_pending_channels(client: TelegramClient) -> None:
             source_repo.update_source_resolved(src.id, title, entity.id)
             source_repo.update_source_name(src.id, title)
             source_repo.set_source_validation_error(src.id, None)
+            extra = await _fetch_channel_extra_info(client, entity)
+            source_repo.update_source_extra_info(src.id, **extra)
             logger.info("Resolved source '%s': %s (id=%d)", src.name, title, entity.id)
         except Exception as e:
             source_repo.set_source_validation_error(src.id, str(e))
@@ -311,10 +328,69 @@ async def _resolve_pending_channels(client: TelegramClient) -> None:
             source_repo.update_destination_resolved(dst.id, title, entity.id)
             source_repo.update_destination_name(dst.id, title)
             source_repo.set_dest_validation_error(dst.id, None)
+            extra = await _fetch_channel_extra_info(client, entity)
+            source_repo.update_destination_extra_info(dst.id, **extra)
             logger.info("Resolved destination '%s': %s (id=%d)", dst.name, title, entity.id)
         except Exception as e:
             source_repo.set_dest_validation_error(dst.id, str(e))
             logger.warning("Cannot access destination '%s' (%s): %s", dst.name, dst.channel_ref, e)
+
+
+async def _fetch_channel_extra_info(client: TelegramClient, entity) -> dict:
+    """Fetch additional channel metadata. Returns a dict ready for update_*_extra_info."""
+    from telethon.tl.types import (
+        InputMessagesFilterPhotos,
+        InputMessagesFilterVideo,
+        InputMessagesFilterDocument,
+    )
+
+    username = getattr(entity, "username", None)
+    participants_count = getattr(entity, "participants_count", None)
+    about = getattr(entity, "about", None)
+    verified = bool(getattr(entity, "verified", False))
+
+    if getattr(entity, "broadcast", False):
+        channel_type = "ערוץ"
+    elif getattr(entity, "megagroup", False):
+        channel_type = "קבוצת-על"
+    elif getattr(entity, "gigagroup", False):
+        channel_type = "קהילה"
+    else:
+        channel_type = "קבוצה"
+
+    total_messages = photos_count = videos_count = docs_count = None
+    try:
+        msgs = await client.get_messages(entity, limit=1)
+        total_messages = msgs.total
+    except Exception:
+        pass
+    try:
+        msgs = await client.get_messages(entity, limit=1, filter=InputMessagesFilterPhotos)
+        photos_count = msgs.total
+    except Exception:
+        pass
+    try:
+        msgs = await client.get_messages(entity, limit=1, filter=InputMessagesFilterVideo)
+        videos_count = msgs.total
+    except Exception:
+        pass
+    try:
+        msgs = await client.get_messages(entity, limit=1, filter=InputMessagesFilterDocument)
+        docs_count = msgs.total
+    except Exception:
+        pass
+
+    return dict(
+        username=username,
+        participants_count=participants_count,
+        about=about,
+        verified=verified,
+        channel_type=channel_type,
+        total_messages=total_messages,
+        photos_count=photos_count,
+        videos_count=videos_count,
+        docs_count=docs_count,
+    )
 
 
 async def _get_entity_safe(client: TelegramClient, ref: str):

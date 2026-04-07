@@ -158,10 +158,21 @@ def init_schema() -> None:
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
     """Add columns that were introduced after initial schema. Safe to re-run."""
-    _add_column_if_missing(conn, "sources",       "validation_error", "TEXT")
-    _add_column_if_missing(conn, "destinations",  "validation_error", "TEXT")
-    _add_column_if_missing(conn, "jobs",          "content_types",    "TEXT DEFAULT 'text,image,video'")
-    _add_column_if_missing(conn, "jobs",          "report_url",       "TEXT")
+    _add_column_if_missing(conn, "sources",       "validation_error",   "TEXT")
+    _add_column_if_missing(conn, "destinations",  "validation_error",   "TEXT")
+    _add_column_if_missing(conn, "jobs",          "content_types",      "TEXT DEFAULT 'text,image,video'")
+    _add_column_if_missing(conn, "jobs",          "report_url",         "TEXT")
+    # Channel extra-info columns
+    for table in ("sources", "destinations"):
+        _add_column_if_missing(conn, table, "username",           "TEXT")
+        _add_column_if_missing(conn, table, "participants_count", "INTEGER")
+        _add_column_if_missing(conn, table, "about",              "TEXT")
+        _add_column_if_missing(conn, table, "verified",           "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, table, "channel_type",       "TEXT")
+        _add_column_if_missing(conn, table, "total_messages",     "INTEGER")
+        _add_column_if_missing(conn, table, "photos_count",       "INTEGER")
+        _add_column_if_missing(conn, table, "videos_count",       "INTEGER")
+        _add_column_if_missing(conn, table, "docs_count",         "INTEGER")
     _seed_missing_settings(conn, {
         "flood_buffer_min_s": "5",
         "flood_buffer_max_s": "10",
