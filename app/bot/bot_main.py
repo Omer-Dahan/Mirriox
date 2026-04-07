@@ -45,6 +45,35 @@ def _auth_filter(config: Config):
 
 # ── Central callback router ────────────────────────────────────────────────────
 
+async def _handle_paging(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, data: str
+) -> None:
+    await answer_callback(update)
+    parts = data.split(":")
+    if len(parts) != 3:
+        return
+    _, screen, page_str = parts
+    try:
+        page = int(page_str)
+    except ValueError:
+        return
+
+    if screen == "jobs":
+        text, kb = renderer.render_job_list(page=page)
+    elif screen == "sources":
+        text, kb = renderer.render_source_list(page=page)
+    elif screen == "destinations":
+        text, kb = renderer.render_dest_list(page=page)
+    elif screen == "filters":
+        text, kb = renderer.render_blocked_words(page=page)
+    elif screen == "admins":
+        bootstrap_ids: list[int] = context.bot_data.get("admin_ids", [])  # type: ignore[union-attr]
+        text, kb = renderer.render_admin_list(bootstrap_ids, page=page)
+    else:
+        return
+    await update_main_message(context, text, kb)
+
+
 async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query is None:
         return
@@ -55,8 +84,7 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     bootstrap_ids: list[int] = context.bot_data.get("admin_ids", [])  # type: ignore[union-attr]
     if not _is_authorized(user.id, bootstrap_ids):
-        await update.callback_query.answer("⛔ אין לך הרשאה")
-        return
+        return  # silent — act as if offline
 
     data: str = update.callback_query.data or ""
 
@@ -65,6 +93,9 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await answer_callback(update)
             text, kb = renderer.render_main_menu()
             await update_main_message(context, text, kb)
+
+        elif data.startswith("page:"):
+            await _handle_paging(update, context, data)
 
         elif data.startswith("job:") or data.startswith("wzd:") or data == "menu:jobs":
             await job_handlers.dispatch(update, context)
@@ -105,11 +136,7 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     bootstrap_ids: list[int] = context.bot_data.get("admin_ids", [])  # type: ignore[union-attr]
     if not _is_authorized(update.effective_user.id, bootstrap_ids):
-        try:
-            await update.message.delete()
-        except Exception:
-            pass
-        return
+        return  # silent — act as if offline
 
     awaiting = context.user_data.get("awaiting_input")  # type: ignore[union-attr]
     if not awaiting:
@@ -157,12 +184,7 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def handle_unauthorized(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Silent drop for unauthorized users."""
-    if update.message:
-        try:
-            await update.message.delete()
-        except Exception:
-            pass
+    pass  # silent — act as if offline
 
 
 # ── Application factory ────────────────────────────────────────────────────────
@@ -200,12 +222,7 @@ def _make_auth_command(handler_fn, config: Config):
         if update.effective_user is None:
             return
         if not _is_authorized(update.effective_user.id, config.ADMIN_IDS):
-            try:
-                if update.message:
-                    await update.message.delete()
-            except Exception:
-                pass
-            return
+            return  # silent — act as if offline
         await handler_fn(update, context)
     return _wrapped
 

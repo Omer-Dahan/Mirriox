@@ -22,6 +22,7 @@ def create_draft_job(
     id_to: Optional[int] = None,
     single_message_id: Optional[int] = None,
     use_blocked_words: bool = True,
+    content_types: str = "text,image,video",
 ) -> Job:
     """Create a job in draft state. Raises JobError on invalid input."""
     src = source_repo.get_source_by_id(source_id)
@@ -48,6 +49,7 @@ def create_draft_job(
         id_to=id_to,
         single_message_id=single_message_id,
         use_blocked_words=use_blocked_words,
+        content_types=content_types,
     )
 
 

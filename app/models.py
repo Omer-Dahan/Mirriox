@@ -115,6 +115,8 @@ class Job:
     id_to: Optional[int]
     single_message_id: Optional[int]
     use_blocked_words: bool
+    content_types: str  # comma-separated: text,image,video
+    report_url: Optional[str]
     status: str
     created_at: str
     started_at: Optional[str]
@@ -144,6 +146,8 @@ class Job:
             id_to=row["id_to"],
             single_message_id=row["single_message_id"],
             use_blocked_words=bool(row["use_blocked_words"]),
+            content_types=row["content_types"] if "content_types" in row.keys() else "text,image,video",
+            report_url=row["report_url"] if "report_url" in row.keys() else None,
             status=row["status"],
             created_at=row["created_at"],
             started_at=row["started_at"],

@@ -22,10 +22,10 @@ def render_main_menu() -> tuple[str, InlineKeyboardMarkup]:
     return text, keyboards.kb_main_menu()
 
 
-def render_job_list() -> tuple[str, InlineKeyboardMarkup]:
+def render_job_list(page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     from app.repositories import job_repo
     jobs = job_repo.get_all()
-    return texts.jobs_list_text(jobs), keyboards.kb_job_list(jobs)
+    return texts.jobs_list_text(jobs), keyboards.kb_job_list(jobs, page=page)
 
 
 def render_job_detail(job_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -52,9 +52,9 @@ def render_job_confirm_cancel(job: "Job") -> tuple[str, InlineKeyboardMarkup]:
     )
 
 
-def render_source_list() -> tuple[str, InlineKeyboardMarkup]:
+def render_source_list(page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     sources = source_repo.get_all_sources()
-    return texts.source_list_text(sources), keyboards.kb_source_list(sources)
+    return texts.source_list_text(sources), keyboards.kb_source_list(sources, page=page)
 
 
 def render_source_detail(source_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -64,9 +64,9 @@ def render_source_detail(source_id: int) -> tuple[str, InlineKeyboardMarkup]:
     return texts.source_detail_text(src), keyboards.kb_source_detail(source_id)
 
 
-def render_dest_list() -> tuple[str, InlineKeyboardMarkup]:
+def render_dest_list(page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     dests = source_repo.get_all_destinations()
-    return texts.dest_list_text(dests), keyboards.kb_dest_list(dests)
+    return texts.dest_list_text(dests), keyboards.kb_dest_list(dests, page=page)
 
 
 def render_dest_detail(dest_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -76,17 +76,17 @@ def render_dest_detail(dest_id: int) -> tuple[str, InlineKeyboardMarkup]:
     return texts.dest_detail_text(dest), keyboards.kb_dest_detail(dest_id)
 
 
-def render_blocked_words() -> tuple[str, InlineKeyboardMarkup]:
+def render_blocked_words(page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     words = filter_repo.get_all()
-    return texts.blocked_words_text(words), keyboards.kb_blocked_words(words)
+    return texts.blocked_words_text(words), keyboards.kb_blocked_words(words, page=page)
 
 
-def render_admin_list(bootstrap_ids: list[int]) -> tuple[str, InlineKeyboardMarkup]:
+def render_admin_list(bootstrap_ids: list[int], page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     from app.repositories import admin_repo
     admins = admin_repo.get_all()
     return (
         texts.admin_list_text(admins, bootstrap_ids),
-        keyboards.kb_admin_list(admins, bootstrap_ids),
+        keyboards.kb_admin_list(admins, bootstrap_ids, page=page),
     )
 
 
@@ -106,7 +106,7 @@ def render_wizard_step(
 ) -> tuple[str, InlineKeyboardMarkup]:
     header = texts.wizard_header(
         partial.get("_step", 1),
-        partial.get("_total", 6),
+        partial.get("_total", 7),
         partial,
     )
     return f"{texts.TITLE_NEW_JOB}\n\n{header}\n\n{step_text}", keyboard

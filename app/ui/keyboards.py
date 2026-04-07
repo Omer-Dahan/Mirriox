@@ -10,12 +10,38 @@ if TYPE_CHECKING:
     from app.models import Job, Source, Destination, BlockedWord, Admin
 
 
+_PAGE_SIZE = 8  # items per page; nav row added when list exceeds this
+
+
 def _btn(label: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(label, callback_data=data)
 
 
+def _url_btn(label: str, url: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(label, url=url)
+
+
 def _back(target: str) -> list[InlineKeyboardButton]:
     return [_btn(texts.BTN_BACK, f"menu:{target}")]
+
+
+def _paged(items: list, page: int) -> tuple[list, int]:
+    """Return (page_items, total_pages). If total_pages==1, no paging needed."""
+    total = len(items)
+    if total <= _PAGE_SIZE:
+        return items, 1
+    total_pages = (total + _PAGE_SIZE - 1) // _PAGE_SIZE
+    start = page * _PAGE_SIZE
+    return items[start : start + _PAGE_SIZE], total_pages
+
+
+def _nav_row(screen: str, page: int, total_pages: int) -> list[InlineKeyboardButton]:
+    row = []
+    if page > 0:
+        row.append(_btn("⬅️ הקודם", f"page:{screen}:{page - 1}"))
+    if page < total_pages - 1:
+        row.append(_btn("הבא ➡️", f"page:{screen}:{page + 1}"))
+    return row
 
 
 def kb_main_menu() -> InlineKeyboardMarkup:
@@ -29,12 +55,15 @@ def kb_main_menu() -> InlineKeyboardMarkup:
 
 # ── Jobs ───────────────────────────────────────────────────────────────────────
 
-def kb_job_list(jobs: list["Job"]) -> InlineKeyboardMarkup:
+def kb_job_list(jobs: list["Job"], page: int = 0) -> InlineKeyboardMarkup:
+    page_jobs, total_pages = _paged(jobs, page)
     rows = []
-    for job in jobs:
+    for job in page_jobs:
         status_label = texts.STATUS_LABELS.get(job.status, job.status)
         label = f"{job.name} [{status_label}]"
         rows.append([_btn(label, f"job:{job.id}:view")])
+    if total_pages > 1:
+        rows.append(_nav_row("jobs", page, total_pages))
     rows.append([_btn(texts.BTN_NEW_JOB, "job:new"), _btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -51,6 +80,9 @@ def kb_job_detail(job: "Job") -> InlineKeyboardMarkup:
 
     if job.is_terminal():
         rows.append([_btn(texts.BTN_DELETE_JOB, f"job:{job.id}:confirm_delete")])
+
+    if job.report_url:
+        rows.append([_url_btn("📋 דוח שגיאות / דילוגים", job.report_url)])
 
     rows.append([
         _btn(texts.BTN_REFRESH, f"job:{job.id}:view"),
@@ -124,6 +156,20 @@ def kb_wizard_mode() -> InlineKeyboardMarkup:
     ])
 
 
+def kb_wizard_content_types(selected: set) -> InlineKeyboardMarkup:
+    def chk(t: str) -> str:
+        return "✅" if t in selected else "◻"
+    rows = [
+        [_btn(f"{chk('image')} 🖼 תמונות (ומדבקות)", "wzd:toggle_type:image")],
+        [_btn(f"{chk('video')} 🎬 סרטונים (וGIF)", "wzd:toggle_type:video")],
+        [_btn(f"{chk('text')} 💬 טקסט", "wzd:toggle_type:text")],
+    ]
+    if selected:
+        rows.append([_btn("✔ המשך", "wzd:done_types")])
+    rows.append([_btn(texts.BTN_CANCEL, "job:cancel_wizard")])
+    return InlineKeyboardMarkup(rows)
+
+
 def kb_wizard_summary(use_blocked_words: bool) -> InlineKeyboardMarkup:
     filter_btn_label = texts.BTN_FILTER_TOGGLE_ON if use_blocked_words else texts.BTN_FILTER_TOGGLE_OFF
     return InlineKeyboardMarkup([
@@ -135,13 +181,15 @@ def kb_wizard_summary(use_blocked_words: bool) -> InlineKeyboardMarkup:
 
 # ── Sources ────────────────────────────────────────────────────────────────────
 
-def kb_source_list(sources: list["Source"]) -> InlineKeyboardMarkup:
+def kb_source_list(sources: list["Source"], page: int = 0) -> InlineKeyboardMarkup:
+    page_srcs, total_pages = _paged(sources, page)
     rows = []
-    for src in sources:
+    for src in page_srcs:
         label = src.display()[:50]
         rows.append([_btn(label, f"src:{src.id}:view")])
-    rows.append([_btn(texts.BTN_ADD + " מקור", "src:new")])
-    rows.append([_btn(texts.BTN_MAIN_MENU, "menu:main")])
+    if total_pages > 1:
+        rows.append(_nav_row("sources", page, total_pages))
+    rows.append([_btn(texts.BTN_ADD + " מקור", "src:new"), _btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -161,13 +209,15 @@ def kb_confirm_delete_source(source_id: int) -> InlineKeyboardMarkup:
 
 # ── Destinations ───────────────────────────────────────────────────────────────
 
-def kb_dest_list(dests: list["Destination"]) -> InlineKeyboardMarkup:
+def kb_dest_list(dests: list["Destination"], page: int = 0) -> InlineKeyboardMarkup:
+    page_dests, total_pages = _paged(dests, page)
     rows = []
-    for dest in dests:
+    for dest in page_dests:
         label = dest.display()[:50]
         rows.append([_btn(label, f"dst:{dest.id}:view")])
-    rows.append([_btn(texts.BTN_ADD + " יעד", "dst:new")])
-    rows.append([_btn(texts.BTN_MAIN_MENU, "menu:main")])
+    if total_pages > 1:
+        rows.append(_nav_row("destinations", page, total_pages))
+    rows.append([_btn(texts.BTN_ADD + " יעד", "dst:new"), _btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -187,14 +237,18 @@ def kb_confirm_delete_dest(dest_id: int) -> InlineKeyboardMarkup:
 
 # ── Filters ────────────────────────────────────────────────────────────────────
 
-def kb_blocked_words(words: list["BlockedWord"]) -> InlineKeyboardMarkup:
+def kb_blocked_words(words: list["BlockedWord"], page: int = 0) -> InlineKeyboardMarkup:
+    page_words, total_pages = _paged(words, page)
     rows = []
-    for w in words:
+    for w in page_words:
         label = f"🗑 {w.word[:30]}"
         rows.append([_btn(label, f"flt:{w.id}:delete")])
-    rows.append([_btn(texts.BTN_ADD + " מילה", "flt:new")])
+    if total_pages > 1:
+        rows.append(_nav_row("filters", page, total_pages))
+    ctrl = [_btn(texts.BTN_ADD + " מילה", "flt:new")]
     if words:
-        rows.append([_btn("🗑 מחק הכל", "flt:confirm_clear")])
+        ctrl.append(_btn("🗑 מחק הכל", "flt:confirm_clear"))
+    rows.append(ctrl)
     rows.append([_btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -220,14 +274,16 @@ def kb_dest_cancel() -> InlineKeyboardMarkup:
 
 # ── Admins ─────────────────────────────────────────────────────────────────────
 
-def kb_admin_list(admins: list["Admin"], bootstrap_ids: list[int]) -> InlineKeyboardMarkup:
+def kb_admin_list(admins: list["Admin"], bootstrap_ids: list[int], page: int = 0) -> InlineKeyboardMarkup:
+    removable = [a for a in admins if a.telegram_id not in bootstrap_ids]
+    page_admins, total_pages = _paged(removable, page)
     rows = []
-    for a in admins:
-        if a.telegram_id not in bootstrap_ids:
-            label = f"🗑 {a.username or str(a.telegram_id)}"
-            rows.append([_btn(label, f"adm:{a.telegram_id}:confirm_remove")])
-    rows.append([_btn(texts.BTN_ADD + " מנהל", "adm:new")])
-    rows.append([_btn(texts.BTN_MAIN_MENU, "menu:main")])
+    for a in page_admins:
+        label = f"🗑 {a.username or str(a.telegram_id)}"
+        rows.append([_btn(label, f"adm:{a.telegram_id}:confirm_remove")])
+    if total_pages > 1:
+        rows.append(_nav_row("admins", page, total_pages))
+    rows.append([_btn(texts.BTN_ADD + " מנהל", "adm:new"), _btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 
 

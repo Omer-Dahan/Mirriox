@@ -31,12 +31,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except TelegramError:
             pass  # Already gone or not accessible — that's fine
 
-    # Delete the /start message itself to keep chat clean
-    try:
-        await update.message.delete()
-    except TelegramError:
-        pass
-
     # Clear any in-flight wizard state
     if context.user_data:
         context.user_data.clear()

@@ -208,6 +208,17 @@ class CopyEngine:
             job.id, copied, skipped, failed,
         )
 
+        # Generate Telegraph report for notable (failed / unexpected-skipped) messages
+        report_msgs = job_repo.get_report_messages(job.id)
+        if report_msgs:
+            from app.services import telegraph_service
+            url = await telegraph_service.create_report(
+                job.id, report_msgs, src_rec.resolved_id, src_rec.channel_ref
+            )
+            if url:
+                job_repo.save_report_url(job.id, url)
+                logger.info("Job #%d Telegraph report: %s", job.id, url)
+
     # ── Message fetching ───────────────────────────────────────────────────────
 
     async def _fetch_messages(
@@ -269,6 +280,14 @@ class CopyEngine:
         if blocked_words and any(self._is_blocked(m, blocked_words) for m in group):
             logger.debug("Job #%d: group %d blocked by filter", job.id, group[0].grouped_id)
             return [("skipped", "blocked_word")] * len(group), src_is_protected
+
+        # Content type filter for album (albums are photos → image type)
+        allowed_types: set[str] = set((job.content_types or "text,image,video").split(","))
+        if allowed_types != {"image", "text", "video"}:
+            group_type = self._get_content_type(group[0])
+            if group_type != "other" and group_type not in allowed_types:
+                logger.debug("Job #%d: album group=%s skipped (type=%s)", job.id, group[0].grouped_id, group_type)
+                return [("skipped", f"content_type:{group_type}")] * len(group), src_is_protected
 
         if src_is_protected:
             # Channel already known to be protected — skip straight to download+upload
@@ -336,6 +355,14 @@ class CopyEngine:
         if blocked_words and self._is_blocked(msg, blocked_words):
             logger.debug("Job #%d: msg #%d blocked by filter", job.id, msg.id)
             return "skipped", "blocked_word", src_is_protected
+
+        # Content type filter
+        allowed_types: set[str] = set((job.content_types or "text,image,video").split(","))
+        if allowed_types != {"image", "text", "video"}:
+            msg_type = self._get_content_type(msg)
+            if msg_type != "other" and msg_type not in allowed_types:
+                logger.debug("Job #%d: msg #%d skipped (type=%s not in %s)", job.id, msg.id, msg_type, allowed_types)
+                return "skipped", f"content_type:{msg_type}", src_is_protected
 
         # Supported type check
         if not self._is_supported_type(msg):
@@ -441,6 +468,25 @@ class CopyEngine:
     def _is_blocked(self, msg: Message, blocked_words: list[str]) -> bool:
         text = (msg.text or "").lower()
         return any(word in text for word in blocked_words)
+
+    @staticmethod
+    def _get_content_type(msg: Message) -> str:
+        """Classify message as 'text', 'image', 'video', or 'other'."""
+        if not msg.media or isinstance(msg.media, MessageMediaUnsupported):
+            return "text"
+        type_name = msg.media.__class__.__name__
+        if type_name == "MessageMediaPhoto":
+            return "image"
+        if type_name == "MessageMediaDocument":
+            doc = msg.media.document
+            if doc:
+                for attr in doc.attributes:
+                    cls = attr.__class__.__name__
+                    if cls == "DocumentAttributeSticker":
+                        return "image"
+                    if cls in ("DocumentAttributeVideo", "DocumentAttributeAnimated"):
+                        return "video"
+        return "other"
 
     def _is_supported_type(self, msg: Message) -> bool:
         if not msg.media:

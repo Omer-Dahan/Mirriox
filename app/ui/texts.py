@@ -123,6 +123,9 @@ def job_detail_text(
 
     params = _mode_params_text(job)
     filter_str = "כן" if job.use_blocked_words else "לא"
+    ct_parts = [p.strip() for p in (job.content_types or "text,image,video").split(",") if p.strip()]
+    ct_map = {"image": "🖼 תמונות", "video": "🎬 סרטונים", "text": "💬 טקסט"}
+    ct_str = ", ".join(ct_map[p] for p in ("image", "video", "text") if p in ct_parts) or "—"
 
     progress = (
         f"סרוקו: — | הועתקו: {job.copied_count} | "
@@ -147,12 +150,17 @@ def job_detail_text(
     finished = _fmt_dt(job.completed_at) if job.completed_at else "—"
     updated = _fmt_dt(job.last_updated_at)
 
+    report_line = ""
+    if job.report_url:
+        report_line = f"\n📋 <a href=\"{job.report_url}\">דוח שגיאות / דילוגים</a>"
+
     return (
         f"{TITLE_JOB_DETAIL}: <b>{_esc(job.name)}</b>\n\n"
         f"📡 מקור: {_esc(src_str)}\n"
         f"📤 יעד: {_esc(dst_str)}\n"
         f"🔧 מצב: {mode_label}\n"
         f"{params}"
+        f"📁 סוגי תוכן: {ct_str}\n"
         f"🚫 סינון מילים: {filter_str}\n"
         f"🔵 סטטוס: {status_label}\n\n"
         f"📊 {progress}\n"
@@ -161,6 +169,7 @@ def job_detail_text(
         f"🔃 עדכון: {updated}"
         f"{retry_info}"
         f"{error_info}"
+        f"{report_line}"
     )
 
 
@@ -193,6 +202,7 @@ def wizard_header(step: int, total: int, partial: dict) -> str:
     return "\n".join(lines)
 
 
+WIZARD_SELECT_CONTENT_TYPES = "בחר אילו סוגי תוכן להעתיק:"
 WIZARD_ENTER_NAME = "הזן שם למשימה:"
 WIZARD_SELECT_SOURCE = "בחר ערוצי מקור (ניתן לבחור כמה) — לחץ ✔ סיים בחירה לאחר הבחירה:"
 WIZARD_SELECT_DEST = "בחר ערוץ יעד:"
@@ -212,6 +222,16 @@ def wizard_summary_text(partial: dict, word_count: int) -> str:
     mode = partial.get("mode", "")
     mode_label = MODE_LABELS.get(mode, mode)
     filter_status = f"כן ({word_count} מילים)" if partial.get("use_blocked_words", True) else "לא"
+
+    ct_set = partial.get("content_types", {"text", "image", "video"})
+    ct_labels = []
+    if "image" in ct_set:
+        ct_labels.append("🖼 תמונות")
+    if "video" in ct_set:
+        ct_labels.append("🎬 סרטונים")
+    if "text" in ct_set:
+        ct_labels.append("💬 טקסט")
+    content_types_str = ", ".join(ct_labels) if ct_labels else "—"
 
     params = ""
     if mode == "date_range":
@@ -235,6 +255,7 @@ def wizard_summary_text(partial: dict, word_count: int) -> str:
         f"📡 מקור: {src_str}\n"
         f"📤 יעד: {_esc(partial.get('dest_name','?'))}\n"
         f"🔧 מצב: {mode_label}{params}\n"
+        f"📁 סוגי תוכן: {content_types_str}\n"
         f"🚫 סינון מילים: {filter_status}\n\n"
         f"אשר כדי לשמור כטיוטה."
     )

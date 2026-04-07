@@ -39,6 +39,10 @@ async def dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _wizard_pick_dest(update, context, int(data.split(":")[2]))
     elif data.startswith("wzd:mode:"):
         await _wizard_pick_mode(update, context, data.split(":")[2])
+    elif data.startswith("wzd:toggle_type:"):
+        await _wizard_toggle_type(update, context, data.split(":")[2])
+    elif data == "wzd:done_types":
+        await _wizard_done_types(update, context)
     elif data == "wzd:add_source":
         await _wizard_redirect_add_source(update, context)
     elif data == "wzd:add_dest":
@@ -143,7 +147,7 @@ async def _job_cancel(
 def _init_wizard(context: ContextTypes.DEFAULT_TYPE) -> dict:
     context.user_data["wizard"] = {  # type: ignore[index]
         "_step": 1,
-        "_total": 6,
+        "_total": 7,
         "name": None,
         "source_ids": [],
         "source_names": [],
@@ -156,6 +160,7 @@ def _init_wizard(context: ContextTypes.DEFAULT_TYPE) -> dict:
         "id_to": None,
         "single_id": None,
         "use_blocked_words": True,
+        "content_types": {"text", "image", "video"},
     }
     return context.user_data["wizard"]  # type: ignore[index]
 
@@ -280,9 +285,9 @@ async def _wizard_pick_mode(
     w["_step"] = 5
 
     if mode == "all":
-        # Skip params step — go directly to summary
+        # Skip params step — go to content types selection
         w["_step"] = 6
-        await _wizard_show_summary(context, w)
+        await _wizard_show_content_types(context, w)
     elif mode == "date_range":
         context.user_data["awaiting_input"] = "job_date_from"  # type: ignore[index]
         text, kb = renderer.render_wizard_step(
@@ -343,6 +348,40 @@ async def _wizard_show_mode_select(
     await update_main_message(context, text, kb)
 
 
+async def _wizard_show_content_types(
+    context: ContextTypes.DEFAULT_TYPE, w: dict
+) -> None:
+    selected: set = w.setdefault("content_types", {"text", "image", "video"})
+    text, kb = renderer.render_wizard_step(
+        texts.WIZARD_SELECT_CONTENT_TYPES, w, keyboards.kb_wizard_content_types(selected)
+    )
+    await update_main_message(context, text, kb)
+
+
+async def _wizard_toggle_type(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, type_name: str
+) -> None:
+    w = _get_wizard(context)
+    if not w:
+        return
+    selected: set = w.setdefault("content_types", {"text", "image", "video"})
+    if type_name in selected:
+        selected.discard(type_name)
+    else:
+        selected.add(type_name)
+    await _wizard_show_content_types(context, w)
+
+
+async def _wizard_done_types(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    w = _get_wizard(context)
+    if not w or not w.get("content_types"):
+        return
+    w["_step"] = 7
+    await _wizard_show_summary(context, w)
+
+
 async def _wizard_show_summary(
     context: ContextTypes.DEFAULT_TYPE, w: dict
 ) -> None:
@@ -380,6 +419,9 @@ async def _wizard_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             else:
                 job_name = name_base
 
+            ct_set: set = w.get("content_types", {"text", "image", "video"})
+            content_types_str = ",".join(sorted(ct_set)) if ct_set else "text,image,video"
+
             job = job_service.create_draft_job(
                 name=job_name,
                 source_id=sid,
@@ -391,6 +433,7 @@ async def _wizard_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 id_to=w.get("id_to"),
                 single_message_id=w.get("single_id"),
                 use_blocked_words=w.get("use_blocked_words", True),
+                content_types=content_types_str,
             )
             created.append(job)
 
@@ -464,7 +507,7 @@ async def handle_job_date_to(
         w["date_to"] = raw
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
         w["_step"] = 6
-        await _wizard_show_summary(context, w)
+        await _wizard_show_content_types(context, w)
     except ValidationError as e:
         text, kb = renderer.render_wizard_step(
             f"⚠️ {e}\n\n{texts.WIZARD_ENTER_DATE_TO}", w, keyboards.kb_wizard_cancel()
@@ -510,7 +553,7 @@ async def handle_job_id_to(
         w["id_to"] = id_to
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
         w["_step"] = 6
-        await _wizard_show_summary(context, w)
+        await _wizard_show_content_types(context, w)
     except ValidationError as e:
         text, kb = renderer.render_wizard_step(
             f"⚠️ {e}\n\n{texts.WIZARD_ENTER_ID_TO}", w, keyboards.kb_wizard_cancel()
@@ -531,7 +574,7 @@ async def handle_job_single_id(
         w["single_id"] = val
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
         w["_step"] = 6
-        await _wizard_show_summary(context, w)
+        await _wizard_show_content_types(context, w)
     except ValidationError as e:
         text, kb = renderer.render_wizard_step(
             f"⚠️ {e}\n\n{texts.WIZARD_ENTER_SINGLE_ID}", w, keyboards.kb_wizard_cancel()

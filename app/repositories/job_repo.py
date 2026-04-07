@@ -17,17 +17,20 @@ def create(
     id_to: Optional[int] = None,
     single_message_id: Optional[int] = None,
     use_blocked_words: bool = True,
+    content_types: str = "text,image,video",
 ) -> Job:
     conn = db.get_connection()
     cur = conn.execute(
         """INSERT INTO jobs
            (name, source_id, destination_id, mode,
-            date_from, date_to, id_from, id_to, single_message_id, use_blocked_words)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            date_from, date_to, id_from, id_to, single_message_id,
+            use_blocked_words, content_types)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (
             name, source_id, destination_id, mode,
             date_from, date_to, id_from, id_to, single_message_id,
             1 if use_blocked_words else 0,
+            content_types,
         ),
     )
     conn.commit()
@@ -180,6 +183,43 @@ def count_by_status() -> dict[str, int]:
 
 
 # ── Copied messages helpers ────────────────────────────────────────────────────
+
+def save_report_url(job_id: int, url: str) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE jobs SET report_url = ? WHERE id = ?", (url, job_id)
+    )
+    conn.commit()
+
+
+def get_report_messages(job_id: int) -> list[dict]:
+    """
+    Return failed + non-routine-skipped messages for report generation.
+    Excludes: blocked_word, empty_message, content_type:* — all expected behavior.
+    """
+    conn = db.get_connection()
+    rows = conn.execute(
+        """SELECT source_message_id, status, skip_reason
+           FROM copied_messages
+           WHERE job_id = ?
+             AND (
+               status = 'failed'
+               OR (
+                 status = 'skipped'
+                 AND (skip_reason IS NULL
+                      OR (skip_reason NOT IN ('blocked_word', 'empty_message')
+                          AND skip_reason NOT LIKE 'content_type:%'))
+               )
+             )
+           ORDER BY source_message_id
+           LIMIT 1000""",
+        (job_id,),
+    ).fetchall()
+    return [
+        {"msg_id": r["source_message_id"], "status": r["status"], "reason": r["skip_reason"]}
+        for r in rows
+    ]
+
 
 def get_copied_source_ids(job_id: int) -> set[int]:
     """Return all source_message_ids already processed for this job."""

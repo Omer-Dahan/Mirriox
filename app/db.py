@@ -160,6 +160,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     """Add columns that were introduced after initial schema. Safe to re-run."""
     _add_column_if_missing(conn, "sources",       "validation_error", "TEXT")
     _add_column_if_missing(conn, "destinations",  "validation_error", "TEXT")
+    _add_column_if_missing(conn, "jobs",          "content_types",    "TEXT DEFAULT 'text,image,video'")
+    _add_column_if_missing(conn, "jobs",          "report_url",       "TEXT")
     _seed_missing_settings(conn, {
         "flood_buffer_min_s": "5",
         "flood_buffer_max_s": "10",
