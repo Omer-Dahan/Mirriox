@@ -180,8 +180,12 @@ def wizard_header(step: int, total: int, partial: dict) -> str:
     lines = [f"<b>שלב {step}/{total}</b>"]
     if partial.get("name"):
         lines.append(f"שם: {_esc(partial['name'])}")
-    if partial.get("source_name"):
-        lines.append(f"מקור: {_esc(partial['source_name'])}")
+    names = partial.get("source_names", [])
+    if names:
+        if len(names) == 1:
+            lines.append(f"מקור: {_esc(names[0])}")
+        else:
+            lines.append(f"מקורות: {len(names)} נבחרו")
     if partial.get("dest_name"):
         lines.append(f"יעד: {_esc(partial['dest_name'])}")
     if partial.get("mode"):
@@ -190,7 +194,7 @@ def wizard_header(step: int, total: int, partial: dict) -> str:
 
 
 WIZARD_ENTER_NAME = "הזן שם למשימה:"
-WIZARD_SELECT_SOURCE = "בחר ערוץ מקור:"
+WIZARD_SELECT_SOURCE = "בחר ערוצי מקור (ניתן לבחור כמה) — לחץ ✔ סיים בחירה לאחר הבחירה:"
 WIZARD_SELECT_DEST = "בחר ערוץ יעד:"
 WIZARD_SELECT_MODE = "בחר מצב העתקה:"
 WIZARD_ENTER_DATE_FROM = "הזן תאריך התחלה (DD/MM/YYYY או DD/MM/YYYY HH:MM):"
@@ -217,10 +221,18 @@ def wizard_summary_text(partial: dict, word_count: int) -> str:
     elif mode == "single_id":
         params = f"\nמזהה הודעה: #{partial.get('single_id','?')}"
 
+    src_names = partial.get("source_names", [])
+    if len(src_names) == 1:
+        src_str = _esc(src_names[0])
+    elif len(src_names) > 1:
+        src_str = f"{len(src_names)} מקורות: " + ", ".join(_esc(n) for n in src_names)
+    else:
+        src_str = "?"
+
     return (
         f"{TITLE_NEW_JOB}\n\n"
         f"📝 שם: <b>{_esc(partial.get('name','?'))}</b>\n"
-        f"📡 מקור: {_esc(partial.get('source_name','?'))}\n"
+        f"📡 מקור: {src_str}\n"
         f"📤 יעד: {_esc(partial.get('dest_name','?'))}\n"
         f"🔧 מצב: {mode_label}{params}\n"
         f"🚫 סינון מילים: {filter_status}\n\n"

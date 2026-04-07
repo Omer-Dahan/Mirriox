@@ -337,9 +337,12 @@ async def _get_entity_safe(client: TelegramClient, ref: str):
         chat_id = int(ref[1:])
         return await client.get_entity(PeerChat(chat_id))
 
-    # Plain positive integer
+    # Plain positive integer — treat as channel ID (PeerChannel)
     if re.match(r"^\d+$", ref):
-        return await client.get_entity(int(ref))
+        try:
+            return await client.get_entity(PeerChannel(int(ref)))
+        except Exception:
+            return await client.get_entity(int(ref))
 
     # @username or username
     return await client.get_entity(ref)

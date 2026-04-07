@@ -24,7 +24,15 @@ def validate_channel_ref(ref: str) -> str:
         ref = "@" + parts[-1].strip().lstrip("@")
 
     # Pure negative integer (channel id like -1001234567890)
-    if re.match(r"^-?\d+$", ref):
+    if re.match(r"^-\d+$", ref):
+        return ref
+
+    # Plain positive integer — could be bare channel id or 100-prefixed channel id
+    if re.match(r"^\d+$", ref):
+        # If prefixed with 100 and long enough (>12 digits), it's a Bot API channel id
+        if ref.startswith("100") and len(ref) > 12:
+            return f"-{ref}"
+        # Otherwise store as-is; worker resolves via PeerChannel
         return ref
 
     # @username or plain username

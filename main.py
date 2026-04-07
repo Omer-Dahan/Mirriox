@@ -15,6 +15,43 @@ import logging
 import os
 
 
+class _CollapseNetworkErrors(logging.Filter):
+    """
+    Replace multi-line tracebacks for transient network errors with a single
+    WARNING line. Keeps the log clean without hiding real problems.
+    """
+    _NETWORK_EXC_NAMES = frozenset({
+        "NetworkError", "ConnectError", "ReadError",
+        "RemoteProtocolError", "ConnectionError", "ConnectionResetError",
+        "TimeoutError",
+    })
+    _NOISY_LOGGERS = frozenset({
+        "telegram.ext.Updater",
+        "telegram.ext.Application",
+        "asyncio",
+    })
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        if record.name not in self._NOISY_LOGGERS:
+            return True
+        if not record.exc_info:
+            return True
+        exc_type = record.exc_info[0]
+        if exc_type is None:
+            return True
+        # Walk the MRO to catch subclasses (e.g. telegram.error.NetworkError)
+        names = {cls.__name__ for cls in exc_type.__mro__}
+        if names & self._NETWORK_EXC_NAMES:
+            record.levelno = logging.WARNING
+            record.levelname = "WARNING"
+            record.exc_info = None
+            record.exc_text = None
+            # Shorten the message to one line
+            record.msg = "ניתוק רשת זמני (%s) — ממשיך לנסות..."
+            record.args = (exc_type.__name__,)
+        return True
+
+
 def _setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -24,6 +61,11 @@ def _setup_logging() -> None:
     logging.getLogger("telethon").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING)
+
+    # Collapse noisy network-error tracebacks to single WARNING lines
+    _f = _CollapseNetworkErrors()
+    for name in _CollapseNetworkErrors._NOISY_LOGGERS:
+        logging.getLogger(name).addFilter(_f)
 
 
 def main() -> None:
@@ -71,9 +113,11 @@ _NETWORK_ERROR_HINTS = (
     "ConnectionError",
     "ConnectionResetError",
     "RemoteProtocolError",
+    "ReadError",
     "NetworkError",
     "TimeoutError",
     "WinError 1231",
+    "WinError 10022",
     "WinError 10060",
     "WinError 10061",
     "WinError 1236",
@@ -113,8 +157,22 @@ async def _run_with_restart(name: str, coro_fn, config) -> None:
                 raise
 
 
+def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """
+    Suppress the known Windows asyncio bug where a socket is already invalid
+    when asyncio tries to shut it down (WinError 10022).
+    All other exceptions go through the default handler.
+    """
+    exc = context.get("exception")
+    if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10022:
+        return  # harmless Windows socket-cleanup race — ignore
+    loop.default_exception_handler(context)
+
+
 async def _run_all(config) -> None:
     """Run bot and worker concurrently, with auto-restart on network errors."""
+    asyncio.get_running_loop().set_exception_handler(_asyncio_exception_handler)
+
     from app.bot.bot_main import run_async as bot_run_async
     from app.worker.worker_main import run_async as worker_run_async
 

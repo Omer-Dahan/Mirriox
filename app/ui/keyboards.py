@@ -87,11 +87,18 @@ def kb_wizard_name_step() -> InlineKeyboardMarkup:
     ])
 
 
-def kb_wizard_source_list(sources: list["Source"]) -> InlineKeyboardMarkup:
+def kb_wizard_source_list(
+    sources: list["Source"], selected_ids: list[int] | None = None
+) -> InlineKeyboardMarkup:
+    if selected_ids is None:
+        selected_ids = []
     rows = []
     for src in sources:
-        label = src.display()[:50]
-        rows.append([_btn(label, f"wzd:src:{src.id}")])
+        check = "✅" if src.id in selected_ids else "◻"
+        label = f"{check} {src.display()[:45]}"
+        rows.append([_btn(label, f"wzd:toggle_src:{src.id}")])
+    if selected_ids:
+        rows.append([_btn("✔ סיים בחירה", "wzd:done_sources")])
     rows.append([_btn(texts.BTN_ADD + " מקור", "wzd:add_source")])
     rows.append([_btn(texts.BTN_CANCEL, "job:cancel_wizard")])
     return InlineKeyboardMarkup(rows)

@@ -31,8 +31,10 @@ async def dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _wizard_toggle_filter(update, context)
     elif data == "wzd:confirm":
         await _wizard_confirm(update, context)
-    elif data.startswith("wzd:src:"):
-        await _wizard_pick_source(update, context, int(data.split(":")[2]))
+    elif data.startswith("wzd:toggle_src:"):
+        await _wizard_toggle_source(update, context, int(data.split(":")[2]))
+    elif data == "wzd:done_sources":
+        await _wizard_done_sources(update, context)
     elif data.startswith("wzd:dst:"):
         await _wizard_pick_dest(update, context, int(data.split(":")[2]))
     elif data.startswith("wzd:mode:"):
@@ -143,8 +145,8 @@ def _init_wizard(context: ContextTypes.DEFAULT_TYPE) -> dict:
         "_step": 1,
         "_total": 6,
         "name": None,
-        "source_id": None,
-        "source_name": None,
+        "source_ids": [],
+        "source_names": [],
         "dest_id": None,
         "dest_name": None,
         "mode": None,
@@ -218,7 +220,7 @@ async def _wizard_redirect_add_dest(
     context.user_data["awaiting_input"] = "wzd_dest_ref"  # type: ignore[index]
 
 
-async def _wizard_pick_source(
+async def _wizard_toggle_source(
     update: Update, context: ContextTypes.DEFAULT_TYPE, source_id: int
 ) -> None:
     w = _get_wizard(context)
@@ -229,8 +231,24 @@ async def _wizard_pick_source(
         text, kb = renderer.render_error("מקור לא נמצא")
         await update_main_message(context, text, kb)
         return
-    w["source_id"] = src.id
-    w["source_name"] = src.display()
+    ids: list = w.setdefault("source_ids", [])
+    names: list = w.setdefault("source_names", [])
+    if source_id in ids:
+        idx = ids.index(source_id)
+        ids.pop(idx)
+        names.pop(idx)
+    else:
+        ids.append(source_id)
+        names.append(src.display())
+    await _wizard_show_source_select(context, w)
+
+
+async def _wizard_done_sources(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    w = _get_wizard(context)
+    if not w or not w.get("source_ids"):
+        return
     w["_step"] = 3
     await _wizard_show_dest_select(context, w)
 
@@ -289,13 +307,14 @@ async def _wizard_show_source_select(
     context: ContextTypes.DEFAULT_TYPE, w: dict
 ) -> None:
     sources = source_repo.get_all_sources()
+    selected = w.get("source_ids", [])
     if not sources:
         text, kb = renderer.render_wizard_step(
-            texts.NO_SOURCES_YET, w, keyboards.kb_wizard_source_list([])
+            texts.NO_SOURCES_YET, w, keyboards.kb_wizard_source_list([], selected)
         )
     else:
         text, kb = renderer.render_wizard_step(
-            texts.WIZARD_SELECT_SOURCE, w, keyboards.kb_wizard_source_list(sources)
+            texts.WIZARD_SELECT_SOURCE, w, keyboards.kb_wizard_source_list(sources, selected)
         )
     await update_main_message(context, text, kb)
 
@@ -340,30 +359,47 @@ async def _wizard_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update_main_message(context, text, kb)
         return
 
-    # Auto-generate name if skipped
-    job_name = w.get("name")
-    if not job_name:
-        src_label = (w.get("source_name") or "מקור").split("(")[0].strip()
-        dst_label = (w.get("dest_name") or "יעד").split("(")[0].strip()
-        job_name = f"{src_label} > {dst_label}"
-        job_name = job_name[:80]
+    source_ids: list = w.get("source_ids", [])
+    source_names: list = w.get("source_names", [])
+    if not source_ids:
+        text, kb = renderer.render_error("לא נבחר אף מקור", "jobs")
+        await update_main_message(context, text, kb)
+        return
+
+    name_base = w.get("name")
+    dst_label = (w.get("dest_name") or "יעד").split("(")[0].strip()
 
     try:
-        job = job_service.create_draft_job(
-            name=job_name,
-            source_id=w["source_id"],
-            destination_id=w["dest_id"],
-            mode=w["mode"],
-            date_from=w.get("date_from"),
-            date_to=w.get("date_to"),
-            id_from=w.get("id_from"),
-            id_to=w.get("id_to"),
-            single_message_id=w.get("single_id"),
-            use_blocked_words=w.get("use_blocked_words", True),
-        )
+        created = []
+        for sid, sname in zip(source_ids, source_names):
+            src_label = sname.split("(")[0].strip()
+            if not name_base:
+                job_name = f"{src_label} > {dst_label}"[:80]
+            elif len(source_ids) > 1:
+                job_name = f"{name_base} — {src_label}"[:80]
+            else:
+                job_name = name_base
+
+            job = job_service.create_draft_job(
+                name=job_name,
+                source_id=sid,
+                destination_id=w["dest_id"],
+                mode=w["mode"],
+                date_from=w.get("date_from"),
+                date_to=w.get("date_to"),
+                id_from=w.get("id_from"),
+                id_to=w.get("id_to"),
+                single_message_id=w.get("single_id"),
+                use_blocked_words=w.get("use_blocked_words", True),
+            )
+            created.append(job)
+
         context.user_data.pop("wizard", None)  # type: ignore[union-attr]
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
-        text, kb = renderer.render_job_detail(job.id)
+        if len(created) == 1:
+            text, kb = renderer.render_job_detail(created[0].id)
+        else:
+            text, kb = renderer.render_job_list()
     except (JobError, ValidationError) as e:
         text, kb = renderer.render_error(str(e), "jobs")
 
@@ -514,10 +550,13 @@ async def handle_wzd_source_ref(
         src = source_repo.add_source(ref, ref)  # name = ref until worker resolves title
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
         if w:
-            w["source_id"] = src.id
-            w["source_name"] = src.display()
-            w["_step"] = 3
-            await _wizard_show_dest_select(context, w)
+            ids: list = w.setdefault("source_ids", [])
+            names: list = w.setdefault("source_names", [])
+            if src.id not in ids:
+                ids.append(src.id)
+                names.append(src.display())
+            w["_step"] = 2
+            await _wizard_show_source_select(context, w)
         else:
             text, kb = renderer.render_source_list()
             await update_main_message(context, text, kb)
