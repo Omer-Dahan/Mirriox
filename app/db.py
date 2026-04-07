@@ -110,10 +110,15 @@ CREATE INDEX IF NOT EXISTS idx_copied_src_id      ON copied_messages(job_id, sou
 INSERT OR IGNORE INTO worker_state(id) VALUES(1);
 
 INSERT OR IGNORE INTO app_settings(key,value) VALUES
-    ('min_delay_ms',        '1500'),
-    ('max_delay_ms',        '4000'),
-    ('flood_wait_buffer_s', '5'),
-    ('max_retries',         '3'),
+    ('min_delay_ms',        '2000'),
+    ('max_delay_ms',        '5000'),
+    ('flood_buffer_min_s',  '5'),
+    ('flood_buffer_max_s',  '10'),
+    ('batch_size_min',      '50'),
+    ('batch_size_max',      '100'),
+    ('batch_pause_min_s',   '60'),
+    ('batch_pause_max_s',   '120'),
+    ('max_retries',         '5'),
     ('heartbeat_interval_s','30'),
     ('main_chat_id',        ''),
     ('main_message_id',     '');
@@ -153,8 +158,16 @@ def init_schema() -> None:
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
     """Add columns that were introduced after initial schema. Safe to re-run."""
-    _add_column_if_missing(conn, "sources",      "validation_error", "TEXT")
+    _add_column_if_missing(conn, "sources",       "validation_error", "TEXT")
     _add_column_if_missing(conn, "destinations",  "validation_error", "TEXT")
+    _seed_missing_settings(conn, {
+        "flood_buffer_min_s": "5",
+        "flood_buffer_max_s": "10",
+        "batch_size_min":     "50",
+        "batch_size_max":     "100",
+        "batch_pause_min_s":  "60",
+        "batch_pause_max_s":  "120",
+    })
 
 
 def _add_column_if_missing(
@@ -164,6 +177,16 @@ def _add_column_if_missing(
     if column not in existing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
         logger.debug("Migration: added column %s.%s", table, column)
+
+
+def _seed_missing_settings(conn: sqlite3.Connection, defaults: dict[str, str]) -> None:
+    """Insert app_settings rows that don't exist yet (idempotent)."""
+    for key, value in defaults.items():
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings(key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        logger.debug("Migration: seeded setting %s=%s (if missing)", key, value)
 
 
 def close() -> None:

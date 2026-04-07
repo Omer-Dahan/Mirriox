@@ -50,6 +50,8 @@ class Source:
 
     def display(self) -> str:
         label = self.title or self.channel_ref
+        if label == self.name:
+            return self.name
         return f"{self.name} ({label})"
 
 

@@ -7,7 +7,12 @@ from datetime import datetime
 from typing import AsyncIterator, Optional
 
 from telethon import TelegramClient
-from telethon.errors import FloodWaitError, ChatWriteForbiddenError, ChannelPrivateError
+from telethon.errors import (
+    FloodWaitError,
+    ChatWriteForbiddenError,
+    ChannelPrivateError,
+    ChatForwardsRestrictedError,
+)
 from telethon.tl.functions.messages import ForwardMessagesRequest
 from telethon.tl.types import (
     Message,
@@ -87,24 +92,37 @@ class CopyEngine:
             job.id, len(already_done), job.last_processed_id,
         )
 
+        # Detected once per job: if True, skip ForwardMessagesRequest entirely
+        src_is_protected: bool = False
+
         job_repo.mark_started(job.id)
 
         copied = job.copied_count
         skipped = job.skipped_count
         failed = job.failed_count
 
-        try:
-            async for msg in self._fetch_messages(job, src_entity):
-                if msg is None or not hasattr(msg, "id"):
-                    continue
+        # Buffer for collecting media-group messages before forwarding them together
+        pending_group: list[Message] = []
+        current_group_id: Optional[int] = None
 
-                if msg.id in already_done:
-                    continue
+        async def flush_group() -> None:
+            nonlocal copied, skipped, failed, pending_group, current_group_id, src_is_protected
+            if not pending_group:
+                return
+            group = pending_group
+            pending_group = []
+            current_group_id = None
 
-                status, skip_reason = await self._process_message(
-                    job, msg, blocked_words, src_entity, dst_entity
-                )
+            # Skip group if the first message was already processed
+            if group[0].id in already_done:
+                return
 
+            statuses, src_is_protected = await self._process_group(
+                job, group, blocked_words, src_entity, dst_entity, src_is_protected
+            )
+
+            last_id = group[-1].id
+            for msg, (status, skip_reason) in zip(group, statuses):
                 job_repo.record_copied_message(
                     job_id=job.id,
                     source_message_id=msg.id,
@@ -113,7 +131,6 @@ class CopyEngine:
                     skip_reason=skip_reason,
                 )
                 already_done.add(msg.id)
-
                 if status == "copied":
                     copied += 1
                 elif status == "skipped":
@@ -121,8 +138,55 @@ class CopyEngine:
                 else:
                     failed += 1
 
-                job_repo.update_progress(job.id, copied, skipped, failed, msg.id)
-                await self._rate_limiter.wait()
+            job_repo.update_progress(job.id, copied, skipped, failed, last_id)
+            await self._rate_limiter.wait()
+
+        try:
+            async for msg in self._fetch_messages(job, src_entity):
+                if msg is None or not hasattr(msg, "id"):
+                    continue
+
+                if msg.grouped_id:
+                    if msg.grouped_id == current_group_id:
+                        # Continue accumulating the same album
+                        pending_group.append(msg)
+                    else:
+                        # New album starts — flush previous group first
+                        await flush_group()
+                        current_group_id = msg.grouped_id
+                        pending_group = [msg]
+                else:
+                    # Not part of an album — flush any pending group, then handle solo
+                    await flush_group()
+
+                    if msg.id in already_done:
+                        continue
+
+                    status, skip_reason, src_is_protected = await self._process_message(
+                        job, msg, blocked_words, src_entity, dst_entity, src_is_protected
+                    )
+
+                    job_repo.record_copied_message(
+                        job_id=job.id,
+                        source_message_id=msg.id,
+                        dest_message_id=None,
+                        status=status,
+                        skip_reason=skip_reason,
+                    )
+                    already_done.add(msg.id)
+
+                    if status == "copied":
+                        copied += 1
+                    elif status == "skipped":
+                        skipped += 1
+                    else:
+                        failed += 1
+
+                    job_repo.update_progress(job.id, copied, skipped, failed, msg.id)
+                    await self._rate_limiter.wait()
+
+            # Flush any remaining album at end of stream
+            await flush_group()
 
         except FloodWaitError:
             logger.warning("Job #%d: FloodWait encountered", job.id)
@@ -187,6 +251,76 @@ class CopyEngine:
 
     # ── Message processing ─────────────────────────────────────────────────────
 
+    async def _process_group(
+        self,
+        job: Job,
+        group: list[Message],
+        blocked_words: list[str],
+        src_entity,
+        dst_entity,
+        src_is_protected: bool,
+    ) -> tuple[list[tuple[str, Optional[str]]], bool]:
+        """
+        Forward a media-group (album) as a single batch.
+        Returns (statuses, src_is_protected) — one status per message.
+        src_is_protected is updated to True if the channel turns out to be protected.
+        """
+        # Check filter: if ANY message triggers a blocked word, skip the whole group
+        if blocked_words and any(self._is_blocked(m, blocked_words) for m in group):
+            logger.debug("Job #%d: group %d blocked by filter", job.id, group[0].grouped_id)
+            return [("skipped", "blocked_word")] * len(group), src_is_protected
+
+        if src_is_protected:
+            # Channel already known to be protected — skip straight to download+upload
+            try:
+                await self._send_group_as_copy(group, dst_entity)
+                return [("copied", None)] * len(group), src_is_protected
+            except FloodWaitError:
+                raise
+            except Exception as e:
+                logger.warning("Job #%d: download+upload album failed: %s", job.id, e)
+                return [("failed", str(e)[:200])] * len(group), src_is_protected
+
+        try:
+            ids = [m.id for m in group]
+            await self._client(ForwardMessagesRequest(
+                from_peer=src_entity,
+                id=ids,
+                to_peer=dst_entity,
+                drop_author=True,
+                random_id=[random.randint(0, 2**63) for _ in ids],
+            ))
+            logger.debug(
+                "Job #%d: forwarded album of %d items (ids=%s)",
+                job.id, len(ids), ids,
+            )
+            return [("copied", None)] * len(group), src_is_protected
+
+        except ChatForwardsRestrictedError:
+            src_is_protected = True
+            logger.info(
+                "Job #%d: source channel is protected — switching to download+upload for all remaining messages",
+                job.id,
+            )
+            try:
+                await self._send_group_as_copy(group, dst_entity)
+                return [("copied", None)] * len(group), src_is_protected
+            except FloodWaitError:
+                raise
+            except Exception as e:
+                logger.warning("Job #%d: download+upload album failed: %s", job.id, e)
+                return [("failed", str(e)[:200])] * len(group), src_is_protected
+
+        except FloodWaitError:
+            raise
+
+        except Exception as e:
+            logger.warning(
+                "Job #%d: failed to forward album (ids=%s): %s",
+                job.id, [m.id for m in group], e,
+            )
+            return [("failed", str(e)[:200])] * len(group), src_is_protected
+
     async def _process_message(
         self,
         job: Job,
@@ -194,48 +328,115 @@ class CopyEngine:
         blocked_words: list[str],
         src_entity,
         dst_entity,
-    ) -> tuple[str, Optional[str]]:
-        """Copy one message. Returns (status, skip_reason)."""
+        src_is_protected: bool,
+    ) -> tuple[str, Optional[str], bool]:
+        """Copy one message. Returns (status, skip_reason, src_is_protected)."""
 
         # Filter check
         if blocked_words and self._is_blocked(msg, blocked_words):
             logger.debug("Job #%d: msg #%d blocked by filter", job.id, msg.id)
-            return "skipped", "blocked_word"
+            return "skipped", "blocked_word", src_is_protected
 
         # Supported type check
         if not self._is_supported_type(msg):
             logger.debug("Job #%d: msg #%d unsupported type", job.id, msg.id)
-            return "skipped", "unsupported_type"
+            return "skipped", "unsupported_type", src_is_protected
 
         # Skip empty service messages
         if not msg.text and not msg.media:
-            return "skipped", "empty_message"
+            return "skipped", "empty_message", src_is_protected
+
+        if src_is_protected:
+            # Channel already known to be protected — skip straight to download+upload
+            try:
+                await self._send_as_copy(msg, dst_entity)
+                return "copied", None, src_is_protected
+            except FloodWaitError:
+                raise
+            except Exception as e:
+                logger.warning("Job #%d: failed to copy msg #%d: %s", job.id, msg.id, e)
+                return "failed", str(e)[:200], src_is_protected
 
         try:
-            await self._forward_without_credit(msg, src_entity, dst_entity)
-            return "copied", None
+            await self._client(ForwardMessagesRequest(
+                from_peer=src_entity,
+                id=[msg.id],
+                to_peer=dst_entity,
+                drop_author=True,
+                random_id=[random.randint(0, 2**63)],
+            ))
+            return "copied", None, src_is_protected
+
+        except ChatForwardsRestrictedError:
+            src_is_protected = True
+            logger.info(
+                "Job #%d: source channel is protected — switching to download+upload for all remaining messages",
+                job.id,
+            )
+            try:
+                await self._send_as_copy(msg, dst_entity)
+                return "copied", None, src_is_protected
+            except FloodWaitError:
+                raise
+            except Exception as e:
+                logger.warning("Job #%d: failed to copy msg #%d: %s", job.id, msg.id, e)
+                return "failed", str(e)[:200], src_is_protected
 
         except FloodWaitError:
             raise
 
         except Exception as e:
             logger.warning("Job #%d: failed to copy msg #%d: %s", job.id, msg.id, e)
-            return "failed", str(e)[:200]
+            return "failed", str(e)[:200], src_is_protected
 
     async def _forward_without_credit(
         self, msg: Message, src_entity, dst_entity
     ) -> None:
-        """
-        Forward a message to dst without 'Forwarded from' attribution.
-        Uses ForwardMessagesRequest with drop_author=True — no download/upload needed.
-        """
+        """Forward a single message without attribution (only used externally)."""
         await self._client(ForwardMessagesRequest(
             from_peer=src_entity,
             id=[msg.id],
             to_peer=dst_entity,
-            drop_author=True,           # removes "Forwarded from X"
+            drop_author=True,
             random_id=[random.randint(0, 2**63)],
         ))
+
+    async def _send_as_copy(self, msg: Message, dst_entity) -> None:
+        """Download and re-upload a single message (used when forwarding is blocked)."""
+        text = msg.text or ""
+
+        if not msg.media or isinstance(msg.media, MessageMediaUnsupported):
+            if text:
+                await self._client.send_message(dst_entity, text)
+            return
+
+        file_bytes: Optional[bytes] = await self._client.download_media(msg, file=bytes)
+        if file_bytes is None:
+            if text:
+                await self._client.send_message(dst_entity, text)
+            return
+
+        await self._client.send_file(dst_entity, file_bytes, caption=text or None)
+
+    async def _send_group_as_copy(self, group: list[Message], dst_entity) -> None:
+        """Download and re-upload a media album (used when forwarding is blocked)."""
+        files: list[bytes] = []
+        captions: list[str] = []
+
+        for m in group:
+            if m.media and not isinstance(m.media, MessageMediaUnsupported):
+                data: Optional[bytes] = await self._client.download_media(m, file=bytes)
+                if data:
+                    files.append(data)
+                    captions.append(m.text or "")
+
+        if not files:
+            text = next((m.text for m in group if m.text), None)
+            if text:
+                await self._client.send_message(dst_entity, text)
+            return
+
+        await self._client.send_file(dst_entity, files, caption=captions)
 
     def _is_blocked(self, msg: Message, blocked_words: list[str]) -> bool:
         text = (msg.text or "").lower()

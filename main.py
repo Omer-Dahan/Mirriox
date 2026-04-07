@@ -65,16 +65,67 @@ def main() -> None:
         _run_setup(config)
 
 
+_NETWORK_ERROR_HINTS = (
+    "getaddrinfo failed",
+    "ConnectError",
+    "ConnectionError",
+    "ConnectionResetError",
+    "RemoteProtocolError",
+    "NetworkError",
+    "TimeoutError",
+    "WinError 1231",
+    "WinError 10060",
+    "WinError 10061",
+    "WinError 1236",
+    "Network is unreachable",
+    "Connection refused",
+    "Server disconnected",
+    "OSError",
+)
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    msg = f"{type(exc).__name__}: {exc}"
+    return any(hint in msg for hint in _NETWORK_ERROR_HINTS)
+
+
+async def _run_with_restart(name: str, coro_fn, config) -> None:
+    """Wrap a long-running coroutine with automatic restart on network errors."""
+    _logger = logging.getLogger(__name__)
+    delay = 5
+    max_delay = 120
+    while True:
+        try:
+            await coro_fn(config)
+            return  # clean exit
+        except asyncio.CancelledError:
+            raise  # shutdown requested — do not restart
+        except Exception as exc:
+            if _is_network_error(exc):
+                _logger.warning(
+                    "[%s] ניתוק רשת (%s) — מנסה שוב בעוד %ds...",
+                    name, exc, delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, max_delay)
+            else:
+                _logger.exception("[%s] שגיאה קריטית — מפסיק: %s", name, exc)
+                raise
+
+
 async def _run_all(config) -> None:
-    """Run bot and worker concurrently in the same event loop."""
+    """Run bot and worker concurrently, with auto-restart on network errors."""
     from app.bot.bot_main import run_async as bot_run_async
     from app.worker.worker_main import run_async as worker_run_async
 
-    worker_task = asyncio.create_task(worker_run_async(config), name="worker")
-    bot_task    = asyncio.create_task(bot_run_async(config),    name="bot")
+    worker_task = asyncio.create_task(
+        _run_with_restart("worker", worker_run_async, config), name="worker"
+    )
+    bot_task = asyncio.create_task(
+        _run_with_restart("bot", bot_run_async, config), name="bot"
+    )
 
     try:
-        # Run until one of them exits or an error occurs
         done, pending = await asyncio.wait(
             [bot_task, worker_task],
             return_when=asyncio.FIRST_EXCEPTION,

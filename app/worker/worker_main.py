@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import signal
 from datetime import datetime, timedelta
 
@@ -91,6 +92,21 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
 
     while not _shutdown_event.is_set():
         try:
+            # Ensure Telethon is still connected (auto-reconnect after network drops)
+            if not client.is_connected():
+                logger.warning("Telethon מנותק — מנסה להתחבר מחדש...")
+                try:
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        logger.error("Session לא מאושר אחרי reconnect — מחכה 30s")
+                        await _sleep_or_shutdown(30)
+                        continue
+                    logger.info("Telethon התחבר מחדש בהצלחה")
+                except Exception as reconn_exc:
+                    logger.warning("reconnect נכשל: %s — מנסה שוב בעוד 15s", reconn_exc)
+                    await _sleep_or_shutdown(15)
+                    continue
+
             # Check for resumable job first (waiting_retry with time elapsed)
             job = job_repo.get_resumable_job()
             if job is None:
@@ -109,19 +125,20 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
 
                 except FloodWaitError as e:
                     wait_s = e.seconds
-                    buffer_s = state_repo.get_int_setting("flood_wait_buffer_s", 5)
+                    buf_min = state_repo.get_int_setting("flood_buffer_min_s", 5)
+                    buf_max = state_repo.get_int_setting("flood_buffer_max_s", 10)
+                    buffer_s = random.uniform(buf_min, buf_max)
                     total_wait = wait_s + buffer_s
                     retry_at = (
                         datetime.utcnow() + timedelta(seconds=total_wait)
                     ).strftime("%Y-%m-%d %H:%M:%S")
 
-                    logger.warning(
-                        "Job #%d: FloodWait %ds — requeueing, retry after %s",
-                        job.id, wait_s, retry_at,
-                    )
-                    # Increment retry counter
                     new_count = job_repo.increment_retry(job.id)
-                    max_retries = state_repo.get_int_setting("max_retries", 3)
+                    max_retries = state_repo.get_int_setting("max_retries", 5)
+                    logger.warning(
+                        "Job #%d: FloodWait %ds (buffer=%.1fs) — retry #%d/%d after %s",
+                        job.id, wait_s, buffer_s, new_count, max_retries, retry_at,
+                    )
 
                     if new_count >= max_retries:
                         job_repo.update_status(
@@ -139,13 +156,12 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                         )
 
                     state_repo.set_worker_status("idle")
-                    # Wait a bit before checking again
                     await _sleep_or_shutdown(min(total_wait, 60))
 
                 except Exception as e:
                     logger.exception("Job #%d: unexpected error: %s", job.id, e)
                     new_count = job_repo.increment_retry(job.id)
-                    max_retries = state_repo.get_int_setting("max_retries", 3)
+                    max_retries = state_repo.get_int_setting("max_retries", 5)
 
                     if new_count >= max_retries:
                         job_repo.update_status(
@@ -153,9 +169,15 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                         )
                         logger.error("Job #%d: max retries reached, marking failed", job.id)
                     else:
+                        # Exponential backoff: 60s, 120s, 240s, 480s … capped at 10 min
+                        backoff_s = min(60 * (2 ** (new_count - 1)), 600)
                         retry_at = (
-                            datetime.utcnow() + timedelta(seconds=60)
+                            datetime.utcnow() + timedelta(seconds=backoff_s)
                         ).strftime("%Y-%m-%d %H:%M:%S")
+                        logger.warning(
+                            "Job #%d: retry #%d/%d — backoff %ds, resumes at %s",
+                            job.id, new_count, max_retries, backoff_s, retry_at,
+                        )
                         job_repo.update_status(
                             job.id,
                             "waiting_retry",
