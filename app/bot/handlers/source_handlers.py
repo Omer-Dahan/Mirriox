@@ -47,11 +47,12 @@ async def _dispatch_src_action(
             # Show loading state
             loading_text = f"{texts.TITLE_SOURCE_DETAIL}: <b>{texts._esc(src.name)}</b>\n\n⏳ מאחזר מידע…"
             await update_main_message(context, loading_text, renderer.render_source_detail(src_id)[1])
-            # Wait for worker to finish fetching (up to 5 seconds)
-            for _ in range(5):
+            # Wait for worker to finish fetching extra info (up to 12 seconds)
+            # Break on channel_type (set at end of _fetch_channel_extra_info), not resolved_id
+            for _ in range(12):
                 await asyncio.sleep(1)
                 updated = source_repo.get_source_by_id(src_id)
-                if updated and updated.resolved_id:
+                if updated and updated.channel_type is not None:
                     break
             text, kb = renderer.render_source_detail(src_id)
         else:
@@ -119,11 +120,11 @@ async def _dispatch_dst_action(
             # Show loading state
             loading_text = f"{texts.TITLE_DEST_DETAIL}: <b>{texts._esc(dst.name)}</b>\n\n⏳ מאחזר מידע…"
             await update_main_message(context, loading_text, renderer.render_dest_detail(dst_id)[1])
-            # Wait for worker to finish fetching (up to 5 seconds)
-            for _ in range(5):
+            # Wait for worker to finish fetching extra info (up to 12 seconds)
+            for _ in range(12):
                 await asyncio.sleep(1)
                 updated = source_repo.get_destination_by_id(dst_id)
-                if updated and updated.resolved_id:
+                if updated and updated.channel_type is not None:
                     break
             text, kb = renderer.render_dest_detail(dst_id)
         else:

@@ -129,6 +129,11 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                 state_repo.set_worker_status("running", job_id=job.id)
                 job_repo.mark_started(job.id)
 
+                # Resolve pending channels in background if bot triggered a refresh
+                if _resolve_trigger is not None and _resolve_trigger.is_set():
+                    _resolve_trigger.clear()
+                    asyncio.ensure_future(_resolve_pending_channels(client))
+
                 try:
                     await engine.run_job(job)
                     state_repo.set_worker_status("idle")
