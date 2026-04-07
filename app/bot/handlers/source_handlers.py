@@ -61,7 +61,7 @@ async def _dispatch_src_action(
 async def _src_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["awaiting_input"] = "source_ref"  # type: ignore[index]
     text = f"{texts.TITLE_SOURCES}\n\nהזן @username, מזהה מספרי, או קישור t.me/:\n<i>השם יישאב אוטומטית מהערוץ</i>"
-    await update_main_message(context, text, keyboards.kb_filter_cancel())
+    await update_main_message(context, text, keyboards.kb_source_cancel())
 
 
 # ── Destinations ───────────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ async def _dispatch_dst_action(
 async def _dst_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["awaiting_input"] = "dest_ref"  # type: ignore[index]
     text = f"{texts.TITLE_DESTINATIONS}\n\nהזן @username, מזהה מספרי, או קישור t.me/:\n<i>השם יישאב אוטומטית מהערוץ</i>"
-    await update_main_message(context, text, keyboards.kb_filter_cancel())
+    await update_main_message(context, text, keyboards.kb_dest_cancel())
 
 
 # ── Text input handlers ────────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ async def handle_source_ref(
         text, kb = renderer.render_source_list()
     except ValidationError as e:
         text = f"{texts.TITLE_SOURCES}\n\n⚠️ {e}\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
-        kb = keyboards.kb_filter_cancel()
+        kb = keyboards.kb_source_cancel()
     await update_main_message(context, text, kb)
 
 
@@ -150,5 +150,5 @@ async def handle_dest_ref(
         text, kb = renderer.render_dest_list()
     except ValidationError as e:
         text = f"{texts.TITLE_DESTINATIONS}\n\n⚠️ {e}\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
-        kb = keyboards.kb_filter_cancel()
+        kb = keyboards.kb_dest_cancel()
     await update_main_message(context, text, kb)

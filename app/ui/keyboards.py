@@ -210,6 +210,14 @@ def kb_filter_cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[_btn(texts.BTN_CANCEL, "menu:filters")]])
 
 
+def kb_source_cancel() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[_btn(texts.BTN_CANCEL, "menu:sources")]])
+
+
+def kb_dest_cancel() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[_btn(texts.BTN_CANCEL, "menu:destinations")]])
+
+
 # ── Admins ─────────────────────────────────────────────────────────────────────
 
 def kb_admin_list(admins: list["Admin"], bootstrap_ids: list[int]) -> InlineKeyboardMarkup:
