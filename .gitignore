@@ -21,7 +21,7 @@ __pycache__/
 Thumbs.db
 
 # Documentation (as per user rules)
-SOFTWARE_OVERVIEW.md
+*.md
 
 # Application Data & Database
 *.db
