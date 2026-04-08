@@ -60,12 +60,12 @@ def submit_job(job_id: int) -> Job:
     if job.status != "draft":
         raise JobError("רק משימות בטיוטה ניתן להגיש")
 
-    active = job_repo.get_active_job()
-    if active and active.id != job_id:
-        raise JobError(
-            f"יש כבר משימה פעילה (#{active.id}: {active.name}). "
-            "יש לבטל אותה תחילה."
-        )
+    # active = job_repo.get_active_job()
+    # if active and active.id != job_id:
+    #     raise JobError(
+    #         f"יש כבר משימה פעילה (#{active.id}: {active.name}). "
+    #         "יש לבטל אותה תחילה."
+    #     )
 
     job_repo.update_status(job_id, "pending")
     logger.info("Job #%d '%s' submitted → pending", job_id, job.name)
@@ -96,7 +96,7 @@ def get_active_job() -> Optional[Job]:
 
 
 def can_submit() -> bool:
-    return job_repo.get_active_job() is None
+    return True
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

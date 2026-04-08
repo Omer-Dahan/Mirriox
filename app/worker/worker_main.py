@@ -438,16 +438,8 @@ async def _send_network_disruption_notification(
 
 
 async def _send_completion_notification(client: TelegramClient, job_id: int) -> None:
-    """Send job summary to the admin chat via userbot after a job ends."""
+    """Send job summary to the destination chat via userbot after a job ends."""
     from app.repositories import state_repo, source_repo
-
-    chat_id_str = state_repo.get_setting("main_chat_id")
-    if not chat_id_str:
-        return
-    try:
-        chat_id = int(chat_id_str)
-    except (ValueError, TypeError):
-        return
 
     job = job_repo.get_by_id(job_id)
     if not job or job.status not in ("completed", "failed"):
@@ -455,8 +447,14 @@ async def _send_completion_notification(client: TelegramClient, job_id: int) -> 
 
     src = source_repo.get_source_by_id(job.source_id)
     dst = source_repo.get_destination_by_id(job.destination_id)
+    
+    if not dst:
+        return
+        
+    target_chat = dst.resolved_id if dst.resolved_id else dst.channel_ref
+
     src_str = src.display() if src else f"#{job.source_id}"
-    dst_str = dst.display() if dst else f"#{job.destination_id}"
+    dst_str = dst.display()
 
     def _esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -477,8 +475,8 @@ async def _send_completion_notification(client: TelegramClient, job_id: int) -> 
     )
 
     try:
-        await client.send_message(chat_id, text, parse_mode="html")
-        logger.info("Job #%d: completion notification sent to chat %d", job_id, chat_id)
+        await client.send_message(target_chat, text, parse_mode="html")
+        logger.info("Job #%d: completion notification sent to chat %s", job_id, target_chat)
     except Exception as e:
         logger.warning("Job #%d: completion notification failed: %s", job_id, e)
 
