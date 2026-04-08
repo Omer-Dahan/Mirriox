@@ -29,6 +29,22 @@ _AUTO_REFRESH_INTERVAL_S = 30
 
 logger = logging.getLogger(__name__)
 
+# Module-level bot reference — set once the Application is running.
+# Used by the worker to send proactive notifications without Telethon.
+_app: Application | None = None
+
+
+async def send_notification(chat_id: int, text: str) -> None:
+    """Send a message via the management bot (not the userbot).
+    Safe to call from the worker — uses the shared Application instance."""
+    if _app is None:
+        logger.warning("send_notification called before bot Application is ready")
+        return
+    try:
+        await _app.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("send_notification failed: %s", e)
+
 # Suppress noisy APScheduler execution logs
 logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
 
@@ -122,6 +138,11 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         elif data.startswith("cfg:") or data == "menu:settings":
             await admin_handlers.dispatch_settings(update, context)
+
+        elif data == "menu:stats":
+            await answer_callback(update)
+            text, kb = renderer.render_transfer_stats()
+            await update_main_message(context, text, kb)
 
         else:
             await update.callback_query.answer()
@@ -257,14 +278,18 @@ def _make_auth_command(handler_fn, config: Config):
 
 def run(config: Config) -> None:
     """Build and start the management bot (blocking)."""
+    global _app
     logger.info("Starting management bot...")
     app = build_application(config)
+    _app = app
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 async def run_async(config: Config) -> None:
     """Run the bot inside an existing event loop (used when combined with worker)."""
+    global _app
     app = build_application(config)
+    _app = app
     async with app:
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)  # type: ignore[union-attr]

@@ -59,7 +59,12 @@ BTN_YES_CANCEL      = "✅ כן, בטל"
 BTN_YES_CLEAR       = "✅ כן, מחק הכל"
 BTN_FILTER_TOGGLE_ON  = "🚫 סינון: כן"
 BTN_FILTER_TOGGLE_OFF = "✅ סינון: לא"
+BTN_GROUP_TOGGLE_ON   = "✅ שליחה במרוכז: כן"
+BTN_GROUP_TOGGLE_OFF  = "❌ שליחה במרוכז: לא"
+BTN_TEXT_TOGGLE_ON    = "✅ העתקת טקסט: כן"
+BTN_TEXT_TOGGLE_OFF   = "❌ העתקת טקסט: לא"
 BTN_SAVE_DRAFT      = "💾 שמור כטיוטה"
+BTN_TRANSFER_STATS  = "📊 סטטיסטיקות העברות"
 
 # ── Screen titles ──────────────────────────────────────────────────────────────
 
@@ -120,69 +125,67 @@ def job_detail_text(
     status_label = STATUS_LABELS.get(job.status, job.status)
     mode_label = MODE_LABELS.get(job.mode, job.mode)
 
-    params = _mode_params_text(job)
     filter_str = "כן" if job.use_blocked_words else "לא"
     ct_parts = [p.strip() for p in (job.content_types or "text,image,video").split(",") if p.strip()]
-    ct_map = {"image": "🖼 תמונות", "video": "🎬 סרטונים", "text": "💬 טקסט"}
+    ct_map = {"image": "תמונות", "video": "סרטונים", "text": "טקסט"}
     ct_str = ", ".join(ct_map[p] for p in ("image", "video", "text") if p in ct_parts) or "—"
 
-    progress = (
-        f"סרוקו: — | הועתקו: {job.copied_count} | "
-        f"דולגו: {job.skipped_count} | נכשלו: {job.failed_count}"
-    )
+    params_line = ""
+    if job.mode == "date_range":
+        params_line = f"\nטווח: {job.date_from} – {job.date_to}"
+    elif job.mode == "id_range":
+        params_line = f"\nטווח מזהים: #{job.id_from} – #{job.id_to}"
+    elif job.mode == "single_id":
+        params_line = f"\nמזהה: #{job.single_message_id}"
 
-    checkpoint = (
-        f"נקודת המשך: #{job.last_processed_id}" if job.last_processed_id else "—"
-    )
-
-    queue_line = f"🔢 מיקום בתור: #{queue_position}\n" if queue_position else ""
+    queue_line = f"\nמיקום בתור: #{queue_position}" if queue_position else ""
 
     retry_info = ""
     if job.status == "waiting_retry":
-        retry_info = f"\n🔄 ניסיון חוזר: {job.retry_count}/{job.max_retries}"
+        retry_info = f"\n\nניסיון חוזר: {job.retry_count}/{job.max_retries}"
         if job.next_retry_at:
             retry_info += f" (ב-{_fmt_dt(job.next_retry_at)})"
 
     error_info = ""
     if job.error_message:
-        error_info = f"\n⚠️ שגיאה אחרונה:\n<code>{esc(job.error_message[:200])}</code>"
+        error_info = f"\n\n⚠️ שגיאה אחרונה:\n<code>{esc(job.error_message[:200])}</code>"
 
-    started = _fmt_dt(job.started_at) if job.started_at else "—"
-    finished = _fmt_dt(job.completed_at) if job.completed_at else "—"
-    updated = _fmt_dt(job.last_updated_at)
+    checkpoint = f"#{job.last_processed_id}" if job.last_processed_id else "—"
+    started  = _fmt_dt(job.started_at)
+    finished = _fmt_dt(job.completed_at)
+    updated  = _fmt_dt(job.last_updated_at)
 
     report_line = ""
     if job.report_url:
-        report_line = f"\n📋 <a href=\"{job.report_url}\">דוח שגיאות / דילוגים</a>"
+        report_line = f"\n\n📋 <a href=\"{job.report_url}\">דוח שגיאות / דילוגים</a>"
 
     return (
-        f"{TITLE_JOB_DETAIL}: <b>{esc(job.name)}</b>\n\n"
-        f"📡 מקור: {esc(src_str)}\n"
-        f"📤 יעד: {esc(dst_str)}\n"
-        f"🔧 מצב: {mode_label}\n"
-        f"{params}"
-        f"📁 סוגי תוכן: {ct_str}\n"
-        f"🚫 סינון מילים: {filter_str}\n"
-        f"🔵 סטטוס: {status_label}\n"
-        f"{queue_line}"
-        f"\n📊 {progress}\n"
-        f"📍 {checkpoint}\n"
-        f"🕐 התחלה: {started} | סיום: {finished}\n"
-        f"🔃 עדכון: {updated}"
+        f"{status_label} {esc(job.name)}\n"
+        f"\n"
+        f"שם: {esc(job.name)}\n"
+        f"מזהה: {job.id}\n"
+        f"\n"
+        f"מקור: {esc(src_str)}\n"
+        f"יעד: {esc(dst_str)}\n"
+        f"מצב: {mode_label}{params_line}\n"
+        f"תוכן: {ct_str}\n"
+        f"סינון מילים: {filter_str}\n"
+        f"סטטוס: {status_label}{queue_line}"
+        f"\n"
+        f"\nתוצאות:\n"
+        f"הועתקו: {job.copied_count}\n"
+        f"דולגו: {job.skipped_count}\n"
+        f"נכשלו: {job.failed_count}\n"
+        f"נקודת המשך: {checkpoint}"
+        f"\n"
+        f"\nזמנים:\n"
+        f"התחלה: {started}\n"
+        f"סיום: {finished}\n"
+        f"עדכון אחרון: {updated}"
         f"{retry_info}"
         f"{error_info}"
         f"{report_line}"
     )
-
-
-def _mode_params_text(job: "Job") -> str:
-    if job.mode == "date_range":
-        return f"📅 מ: {job.date_from} עד: {job.date_to}\n"
-    if job.mode == "id_range":
-        return f"🔢 מ: #{job.id_from} עד: #{job.id_to}\n"
-    if job.mode == "single_id":
-        return f"1️⃣ הודעה: #{job.single_message_id}\n"
-    return ""
 
 
 # ── Job creation wizard ────────────────────────────────────────────────────────
@@ -224,6 +227,8 @@ def wizard_summary_text(partial: dict, word_count: int) -> str:
     mode = partial.get("mode", "")
     mode_label = MODE_LABELS.get(mode, mode)
     filter_status = f"כן ({word_count} מילים)" if partial.get("use_blocked_words", True) else "לא"
+    group_status = "כן" if partial.get("group_media", True) else "לא"
+    text_status = "כן" if partial.get("copy_text", True) else "לא"
 
     ct_set = partial.get("content_types", {"text", "image", "video"})
     ct_labels = []
@@ -258,8 +263,54 @@ def wizard_summary_text(partial: dict, word_count: int) -> str:
         f"📤 יעד: {esc(partial.get('dest_name','?'))}\n"
         f"🔧 מצב: {mode_label}{params}\n"
         f"📁 סוגי תוכן: {content_types_str}\n"
-        f"🚫 סינון מילים: {filter_status}\n\n"
+        f"🚫 סינון מילים: {filter_status}\n"
+        f"📦 שליחה במרוכז: {group_status}\n"
+        f"📝 העתקת טקסט: {text_status}\n\n"
         f"אשר כדי לשמור כטיוטה."
+    )
+
+
+DAILY_LIMIT = 20_000
+
+
+def moon_progress_bar(percent: float, total_cells: int = 10) -> str:
+    """Moon-phase progress bar. Fills left→right: 🌑 empty, 🌒🌓🌔 partial, 🌕 full."""
+    progress = max(0.0, min(100.0, percent)) / 100
+    filled = progress * total_cells
+    full_count = int(filled)
+    remainder = filled - full_count
+
+    if full_count < total_cells and remainder > 0:
+        if remainder >= 0.67:
+            partial = "🌔"
+        elif remainder >= 0.34:
+            partial = "🌓"
+        else:
+            partial = "🌒"
+        empty_count = total_cells - full_count - 1
+    else:
+        partial = ""
+        empty_count = total_cells - full_count
+
+    return "🌕" * full_count + partial + "🌑" * empty_count
+
+
+def transfer_stats_text(stats: dict) -> str:
+    today = stats["since_midnight"]
+    pct = min(today / DAILY_LIMIT * 100, 100)
+    bar = moon_progress_bar(pct)
+    remaining = max(DAILY_LIMIT - today, 0)
+    limit_line = (
+        f"\n{bar} {pct:.1f}%\n"
+        f"נוצלו: <b>{today:,}</b> / {DAILY_LIMIT:,}  |  נותרו: <b>{remaining:,}</b>"
+    )
+    return (
+        "📊 <b>סטטיסטיקות העברות</b>\n\n"
+        f"🕐 שעה אחרונה: <b>{stats['last_hour']:,}</b> הודעות\n"
+        f"📅 היום (מחצות): <b>{stats['since_midnight']:,}</b> הודעות\n"
+        f"📆 24 שעות אחרונות: <b>{stats['last_24h']:,}</b> הודעות\n"
+        f"\n<b>מגבלה יומית: {DAILY_LIMIT:,} הודעות</b>\n"
+        f"{limit_line}"
     )
 
 
@@ -451,12 +502,14 @@ def esc(text: str | None) -> str:
 
 
 def _fmt_dt(dt_str: str | None) -> str:
+    """Parse a UTC datetime string from SQLite and return it in Israel local time (Asia/Jerusalem)."""
     if not dt_str:
         return "—"
-    # SQLite returns 'YYYY-MM-DD HH:MM:SS', show as 'DD/MM/YYYY HH:MM'
     try:
-        from datetime import datetime
-        dt = datetime.strptime(dt_str[:19], "%Y-%m-%d %H:%M:%S")
-        return dt.strftime("%d/%m/%Y %H:%M")
-    except ValueError:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        _IL = ZoneInfo("Asia/Jerusalem")
+        dt = datetime.strptime(dt_str[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.astimezone(_IL).strftime("%d/%m/%Y %H:%M")
+    except Exception:
         return dt_str[:16]

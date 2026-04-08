@@ -30,3 +30,6 @@ SOFTWARE_OVERVIEW.md
 *.db-shm
 *.db-wal
 sessions/
+
+# Claude Code project settings
+.claude/

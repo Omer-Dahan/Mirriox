@@ -38,7 +38,7 @@ class CopyEngine:
         from app.repositories import state_repo
         settings = state_repo.get_settings_dict()
         self._rate_limiter.update_from_settings(settings)
-        group_media: bool = settings.get("group_media", "1") == "1"
+        group_media: bool = job.group_media
 
         # Snapshot blocked words once at job start
         blocked_words: list[str] = []
@@ -124,6 +124,11 @@ class CopyEngine:
             allowed_types: set[str] = set((job.content_types or "text,image,video").split(","))
             to_send: list[Message] = []
             for m in buffer:
+                if not job.copy_text and (not m.media or isinstance(m.media, MessageMediaUnsupported)):
+                    job_repo.record_copied_message(job.id, m.id, None, "skipped", "text_stripped_empty")
+                    already_done.add(m.id)
+                    skipped += 1
+                    continue
                 if blocked_words and self._is_blocked(m, blocked_words):
                     job_repo.record_copied_message(job.id, m.id, None, "skipped", "blocked_word")
                     already_done.add(m.id)
@@ -147,20 +152,23 @@ class CopyEngine:
                 nonlocal src_is_protected
                 try:
                     if src_is_protected:
-                        await self._send_as_copy(m, dst_entity)
+                        await self._send_as_copy(m, dst_entity, copy_text=job.copy_text)
                     else:
-                        await self._client(ForwardMessagesRequest(
-                            from_peer=src_entity,
-                            id=[m.id],
-                            to_peer=dst_entity,
-                            drop_author=True,
-                            random_id=[random.randint(0, 2**63)],  # nosec B311
-                        ))
+                        if job.copy_text:
+                            await self._client(ForwardMessagesRequest(
+                                from_peer=src_entity,
+                                id=[m.id],
+                                to_peer=dst_entity,
+                                drop_author=True,
+                                random_id=[random.randint(0, 2**63)],  # nosec B311
+                            ))
+                        else:
+                            await self._client.send_file(dst_entity, m.media, caption="")
                     return "copied", None
                 except ChatForwardsRestrictedError:
                     src_is_protected = True
                     try:
-                        await self._send_as_copy(m, dst_entity)
+                        await self._send_as_copy(m, dst_entity, copy_text=job.copy_text)
                         return "copied", None
                     except FloodWaitError:
                         raise
@@ -183,7 +191,7 @@ class CopyEngine:
                 # Try fast album send via file refs; fall back to individual forwards (not download)
                 album_ok = False
                 try:
-                    await self._send_group_by_ref(to_send, dst_entity)
+                    await self._send_group_by_ref(to_send, dst_entity, copy_text=job.copy_text)
                     album_ok = True
                     logger.info(
                         "Job #%d: grouped %d solo media into album (ids=%s)",
@@ -451,7 +459,7 @@ class CopyEngine:
         if src_is_protected:
             # Channel already known to be protected — skip straight to download+upload
             try:
-                await self._send_group_as_copy(group, dst_entity)
+                await self._send_group_as_copy(group, dst_entity, copy_text=job.copy_text)
                 return [("copied", None)] * len(group), src_is_protected
             except FloodWaitError:
                 raise
@@ -459,15 +467,18 @@ class CopyEngine:
                 logger.warning("Job #%d: download+upload album failed: %s", job.id, e)
                 return [("failed", str(e)[:200])] * len(group), src_is_protected
 
+        ids = [m.id for m in group]
         try:
-            ids = [m.id for m in group]
-            await self._client(ForwardMessagesRequest(
-                from_peer=src_entity,
-                id=ids,
-                to_peer=dst_entity,
-                drop_author=True,
-                random_id=[random.randint(0, 2**63) for _ in ids],  # nosec B311
-            ))
+            if job.copy_text:
+                await self._client(ForwardMessagesRequest(
+                    from_peer=src_entity,
+                    id=ids,
+                    to_peer=dst_entity,
+                    drop_author=True,
+                    random_id=[random.randint(0, 2**63) for _ in ids],  # nosec B311
+                ))
+            else:
+                await self._send_group_by_ref(group, dst_entity, copy_text=False)
             logger.info(
                 "Job #%d: forwarded album of %d items (ids=%s)",
                 job.id, len(ids), ids,
@@ -532,10 +543,13 @@ class CopyEngine:
         if not msg.text and not msg.media:
             return "skipped", "empty_message", src_is_protected
 
+        if not job.copy_text and (not msg.media or isinstance(msg.media, MessageMediaUnsupported)):
+            return "skipped", "text_stripped_empty", src_is_protected
+
         if src_is_protected:
             # Channel already known to be protected — skip straight to download+upload
             try:
-                await self._send_as_copy(msg, dst_entity)
+                await self._send_as_copy(msg, dst_entity, copy_text=job.copy_text)
                 return "copied", None, src_is_protected
             except FloodWaitError:
                 raise
@@ -544,13 +558,16 @@ class CopyEngine:
                 return "failed", str(e)[:200], src_is_protected
 
         try:
-            await self._client(ForwardMessagesRequest(
-                from_peer=src_entity,
-                id=[msg.id],
-                to_peer=dst_entity,
-                drop_author=True,
-                random_id=[random.randint(0, 2**63)],  # nosec B311
-            ))
+            if job.copy_text:
+                await self._client(ForwardMessagesRequest(
+                    from_peer=src_entity,
+                    id=[msg.id],
+                    to_peer=dst_entity,
+                    drop_author=True,
+                    random_id=[random.randint(0, 2**63)],  # nosec B311
+                ))
+            else:
+                await self._client.send_file(dst_entity, msg.media, caption="")
             return "copied", None, src_is_protected
 
         except ChatForwardsRestrictedError:
@@ -560,7 +577,7 @@ class CopyEngine:
                 job.id,
             )
             try:
-                await self._send_as_copy(msg, dst_entity)
+                await self._send_as_copy(msg, dst_entity, copy_text=job.copy_text)
                 return "copied", None, src_is_protected
             except FloodWaitError:
                 raise
@@ -587,9 +604,9 @@ class CopyEngine:
             random_id=[random.randint(0, 2**63)],  # nosec B311
         ))
 
-    async def _send_as_copy(self, msg: Message, dst_entity) -> None:
+    async def _send_as_copy(self, msg: Message, dst_entity, copy_text: bool = True) -> None:
         """Download and re-upload a single message (used when forwarding is blocked)."""
-        text = msg.text or ""
+        text = msg.text if copy_text else ""
 
         if not msg.media or isinstance(msg.media, MessageMediaUnsupported):
             if text:
@@ -604,7 +621,7 @@ class CopyEngine:
 
         await self._client.send_file(dst_entity, file_bytes, caption=text or None)
 
-    async def _send_group_by_ref(self, group: list[Message], dst_entity) -> None:
+    async def _send_group_by_ref(self, group: list[Message], dst_entity, copy_text: bool = True) -> None:
         """
         Send a media album using existing Telegram file references — no download needed.
         Falls back to _send_group_as_copy if references are expired or inaccessible.
@@ -646,7 +663,7 @@ class CopyEngine:
             multi.append(InputSingleMedia(
                 media=input_media,
                 random_id=random.randint(0, 2**63),  # nosec B311
-                message=caption,
+                message=caption if copy_text else "",
             ))
 
         if not multi:
@@ -654,13 +671,13 @@ class CopyEngine:
 
         await self._client(SendMultiMediaRequest(peer=dst_entity, multi_media=multi))
 
-    async def _send_group_as_copy(self, group: list[Message], dst_entity) -> None:
+    async def _send_group_as_copy(self, group: list[Message], dst_entity, copy_text: bool = True) -> None:
         """
         Send a media group by trying file references first (fast), then
         falling back to download+reupload (slow, used when refs are expired).
         """
         try:
-            await self._send_group_by_ref(group, dst_entity)
+            await self._send_group_by_ref(group, dst_entity, copy_text=copy_text)
             return
         except FloodWaitError:
             raise
@@ -675,10 +692,10 @@ class CopyEngine:
                 data: Optional[bytes] = await self._client.download_media(m, file=bytes)
                 if data:
                     files.append(data)
-                    captions.append(m.text or "")
+                    captions.append(m.text if copy_text else "")
 
         if not files:
-            text = next((m.text for m in group if m.text), None)
+            text = next((m.text for m in group if m.text), None) if copy_text else None
             if text:
                 await self._client.send_message(dst_entity, text)
             return

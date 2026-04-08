@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     id_to             INTEGER,
     single_message_id INTEGER,
     use_blocked_words INTEGER NOT NULL DEFAULT 1,
+    group_media       INTEGER NOT NULL DEFAULT 1,
+    copy_text         INTEGER NOT NULL DEFAULT 1,
     status            TEXT NOT NULL DEFAULT 'draft'
                       CHECK(status IN ('draft','pending','running','paused',
                                        'completed','cancelled','failed','waiting_retry')),
@@ -162,6 +164,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "destinations",  "validation_error",   "TEXT")
     _add_column_if_missing(conn, "jobs",          "content_types",      "TEXT DEFAULT 'text,image,video'")
     _add_column_if_missing(conn, "jobs",          "report_url",         "TEXT")
+    _add_column_if_missing(conn, "jobs",          "group_media",        "INTEGER DEFAULT 1")
+    _add_column_if_missing(conn, "jobs",          "copy_text",          "INTEGER DEFAULT 1")
     # Channel extra-info columns
     for table in ("sources", "destinations"):
         _add_column_if_missing(conn, table, "username",           "TEXT")

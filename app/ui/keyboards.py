@@ -50,6 +50,7 @@ def kb_main_menu() -> InlineKeyboardMarkup:
         [_btn(texts.BTN_SOURCES, "menu:sources"), _btn(texts.BTN_DESTINATIONS, "menu:destinations")],
         [_btn(texts.BTN_BLOCKED_WORDS, "menu:filters"), _btn(texts.BTN_ADMINS, "menu:admins")],
         [_btn(texts.BTN_SETTINGS, "menu:settings")],
+        [_btn(texts.BTN_TRANSFER_STATS, "menu:stats")],
     ])
 
 
@@ -175,11 +176,15 @@ def kb_wizard_content_types(selected: set) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def kb_wizard_summary(use_blocked_words: bool) -> InlineKeyboardMarkup:
+def kb_wizard_summary(use_blocked_words: bool, group_media: bool, copy_text: bool) -> InlineKeyboardMarkup:
     filter_btn_label = texts.BTN_FILTER_TOGGLE_ON if use_blocked_words else texts.BTN_FILTER_TOGGLE_OFF
+    group_btn_label = texts.BTN_GROUP_TOGGLE_ON if group_media else texts.BTN_GROUP_TOGGLE_OFF
+    text_btn_label = texts.BTN_TEXT_TOGGLE_ON if copy_text else texts.BTN_TEXT_TOGGLE_OFF
     return InlineKeyboardMarkup([
         [_btn(texts.BTN_SAVE_DRAFT, "wzd:confirm")],
         [_btn(filter_btn_label, "wzd:toggle_filter")],
+        [_btn(group_btn_label, "wzd:toggle_group")],
+        [_btn(text_btn_label, "wzd:toggle_copy_text")],
         [_btn(texts.BTN_CANCEL, "job:cancel_wizard")],
     ])
 
@@ -303,6 +308,15 @@ def kb_confirm_remove_admin(telegram_id: int) -> InlineKeyboardMarkup:
 
 def kb_admin_cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[_btn(texts.BTN_CANCEL, "menu:admins")]])
+
+
+# ── Transfer stats ─────────────────────────────────────────────────────────────
+
+def kb_transfer_stats() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [_btn(texts.BTN_REFRESH, "menu:stats")],
+        [_btn(texts.BTN_MAIN_MENU, "menu:main")],
+    ])
 
 
 # ── Settings ───────────────────────────────────────────────────────────────────

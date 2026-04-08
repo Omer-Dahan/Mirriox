@@ -96,6 +96,12 @@ def render_settings() -> tuple[str, InlineKeyboardMarkup]:
     return texts.settings_text(settings), keyboards.kb_settings(settings)
 
 
+def render_transfer_stats() -> tuple[str, InlineKeyboardMarkup]:
+    from app.repositories import job_repo
+    stats = job_repo.get_transfer_stats()
+    return texts.transfer_stats_text(stats), keyboards.kb_transfer_stats()
+
+
 def render_error(msg: str, back_target: str = "main") -> tuple[str, InlineKeyboardMarkup]:
     return texts.error_text(msg), keyboards.kb_error_back(back_target)
 

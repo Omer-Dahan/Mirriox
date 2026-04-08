@@ -162,6 +162,11 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                     _resolve_trigger.clear()
                     asyncio.ensure_future(_resolve_pending_channels(client))
 
+                # Check daily transfer limit before starting
+                if await _check_daily_limit(client, job.id):
+                    state_repo.set_worker_status("idle")
+                    continue
+
                 try:
                     await engine.run_job(job)
                     state_repo.set_worker_status("idle")
@@ -359,6 +364,19 @@ def _startup_recovery() -> None:
 
 
 
+async def _notify(chat_id_str: str | None, text: str, job_id: int, label: str) -> None:
+    """Send a notification via the management bot. Shared helper for all worker notifications."""
+    if not chat_id_str:
+        return
+    try:
+        chat_id = int(chat_id_str)
+    except (ValueError, TypeError):
+        return
+    from app.bot.bot_main import send_notification
+    await send_notification(chat_id, text)
+    logger.info("Job #%d: %s notification sent", job_id, label)
+
+
 async def _send_network_disruption_notification(
     client: TelegramClient,
     job_id: int,
@@ -367,19 +385,6 @@ async def _send_network_disruption_notification(
     reconnecting: bool = False,
     resumed: bool = False,
 ) -> None:
-    """
-    Notify the admin chat about a network disruption mid-job.
-    Called with reconnecting=True when the drop is first detected,
-    and with resumed=True once the connection is restored.
-    """
-    chat_id_str = state_repo.get_setting("main_chat_id")
-    if not chat_id_str:
-        return
-    try:
-        chat_id = int(chat_id_str)
-    except (ValueError, TypeError):
-        return
-
     job = job_repo.get_by_id(job_id)
     job_name = job.name if job else f"#{job_id}"
 
@@ -403,15 +408,11 @@ async def _send_network_disruption_notification(
             f"💬 פרטים: {error_msg}"
         )
 
-    try:
-        await client.send_message(chat_id, text, parse_mode="html")
-        logger.info("Job #%d: network disruption notification sent (resumed=%s)", job_id, resumed)
-    except Exception as e:
-        logger.warning("Job #%d: failed to send disruption notification: %s", job_id, e)
+    await _notify(state_repo.get_setting("main_chat_id"), text, job_id, f"network_disruption resumed={resumed}")
 
 
 async def _send_completion_notification(client: TelegramClient, job_id: int) -> None:
-    """Send job summary to the destination chat via userbot after a job ends."""
+    """Send job summary to the admin chat via the management bot after a job ends."""
     from app.repositories import source_repo
 
     job = job_repo.get_by_id(job_id)
@@ -421,13 +422,8 @@ async def _send_completion_notification(client: TelegramClient, job_id: int) -> 
     src = source_repo.get_source_by_id(job.source_id)
     dst = source_repo.get_destination_by_id(job.destination_id)
 
-    if not dst:
-        return
-
-    target_chat = dst.resolved_id if dst.resolved_id else dst.channel_ref
-
     src_str = src.display() if src else f"#{job.source_id}"
-    dst_str = dst.display()
+    dst_str = dst.display() if dst else f"#{job.destination_id}"
 
     def _esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -447,11 +443,67 @@ async def _send_completion_notification(client: TelegramClient, job_id: int) -> 
         f"{report_line}"
     )
 
-    try:
-        await client.send_message(target_chat, text, parse_mode="html")
-        logger.info("Job #%d: completion notification sent to chat %s", job_id, target_chat)
-    except Exception as e:
-        logger.warning("Job #%d: completion notification failed: %s", job_id, e)
+    await _notify(state_repo.get_setting("main_chat_id"), text, job_id, "completion")
+
+
+async def _check_daily_limit(client: TelegramClient, job_id: int) -> bool:
+    """
+    Check if the daily transfer limit has been reached.
+    If so, reschedule the job to next midnight (Israel time) and notify the user.
+    Returns True if the limit is hit (caller should skip this job), False otherwise.
+    """
+    from app.ui.texts import DAILY_LIMIT
+
+    stats = job_repo.get_transfer_stats()
+    if stats["since_midnight"] < DAILY_LIMIT:
+        return False
+
+    # Limit reached — compute next midnight in Israel time
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+    _IL = ZoneInfo("Asia/Jerusalem")
+    now_il = datetime.now(timezone.utc).astimezone(_IL)
+    next_midnight_il = (now_il + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    next_midnight_utc = next_midnight_il.astimezone(timezone.utc)
+    retry_at = next_midnight_utc.strftime("%Y-%m-%d %H:%M:%S")
+
+    job_repo.update_status(
+        job_id,
+        "waiting_retry",
+        error=f"הגבלה יומית: {DAILY_LIMIT:,} הודעות הועברו היום",
+        next_retry_at=retry_at,
+    )
+    logger.warning(
+        "Job #%d: daily limit reached (%d msgs today) — rescheduled to %s",
+        job_id, stats["since_midnight"], retry_at,
+    )
+    await _send_daily_limit_notification(client, job_id, stats["since_midnight"], next_midnight_il)
+    return True
+
+
+async def _send_daily_limit_notification(
+    client: TelegramClient,
+    job_id: int,
+    count_today: int,
+    next_midnight_il,
+) -> None:
+    """Notify the admin that the daily limit was hit and the job is deferred to tomorrow."""
+    from app.ui.texts import DAILY_LIMIT
+
+    job = job_repo.get_by_id(job_id)
+    job_name = job.name if job else f"#{job_id}"
+    resume_time = next_midnight_il.strftime("%d/%m/%Y 00:00")
+
+    text = (
+        f"⏸ <b>הגבלה יומית הושגה</b>\n\n"
+        f"📋 משימה: <b>{job_name}</b>\n"
+        f"📊 הועברו היום: <b>{count_today:,}</b> / {DAILY_LIMIT:,} הודעות\n\n"
+        f"🕛 המשימה תמשיך אוטומטית מחר בחצות ({resume_time})."
+    )
+
+    await _notify(state_repo.get_setting("main_chat_id"), text, job_id, "daily_limit")
 
 
 async def _resolve_pending_channels(client: TelegramClient) -> None:

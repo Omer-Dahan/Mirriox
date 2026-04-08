@@ -21,6 +21,8 @@ def create_draft_job(
     id_to: Optional[int] = None,
     single_message_id: Optional[int] = None,
     use_blocked_words: bool = True,
+    group_media: bool = True,
+    copy_text: bool = True,
     content_types: str = "text,image,video",
 ) -> Job:
     """Create a job in draft state. Raises JobError on invalid input."""
@@ -48,6 +50,8 @@ def create_draft_job(
         id_to=id_to,
         single_message_id=single_message_id,
         use_blocked_words=use_blocked_words,
+        group_media=group_media,
+        copy_text=copy_text,
         content_types=content_types,
     )
 

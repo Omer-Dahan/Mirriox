@@ -17,6 +17,8 @@ def create(
     id_to: Optional[int] = None,
     single_message_id: Optional[int] = None,
     use_blocked_words: bool = True,
+    group_media: bool = True,
+    copy_text: bool = True,
     content_types: str = "text,image,video",
 ) -> Job:
     conn = db.get_connection()
@@ -24,12 +26,14 @@ def create(
         """INSERT INTO jobs
            (name, source_id, destination_id, mode,
             date_from, date_to, id_from, id_to, single_message_id,
-            use_blocked_words, content_types)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            use_blocked_words, group_media, copy_text, content_types)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             name, source_id, destination_id, mode,
             date_from, date_to, id_from, id_to, single_message_id,
             1 if use_blocked_words else 0,
+            1 if group_media else 0,
+            1 if copy_text else 0,
             content_types,
         ),
     )
@@ -251,6 +255,46 @@ def get_report_messages(job_id: int) -> list[dict]:
         {"msg_id": r["source_message_id"], "status": r["status"], "reason": r["skip_reason"]}
         for r in rows
     ]
+
+
+def get_transfer_stats() -> dict[str, int]:
+    """Return copied-message counts for the last hour, since midnight Israel time, and last 24h.
+
+    processed_at is stored as UTC in SQLite. Cutoffs are computed in Python using the
+    real Israel timezone (Asia/Jerusalem) so DST transitions are handled correctly.
+    """
+    from datetime import datetime, timezone, timedelta
+    from zoneinfo import ZoneInfo
+    _IL = ZoneInfo("Asia/Jerusalem")
+
+    now_utc = datetime.now(timezone.utc)
+    # Midnight today in Israel time, converted back to UTC
+    now_il = now_utc.astimezone(_IL)
+    midnight_il = now_il.replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight_utc = midnight_il.astimezone(timezone.utc)
+
+    fmt = "%Y-%m-%d %H:%M:%S"
+    cutoff_hour     = (now_utc - timedelta(hours=1)).strftime(fmt)
+    cutoff_midnight = midnight_utc.strftime(fmt)
+    cutoff_24h      = (now_utc - timedelta(hours=24)).strftime(fmt)
+
+    conn = db.get_connection()
+    row = conn.execute(
+        """SELECT
+             COUNT(CASE WHEN processed_at >= ? THEN 1 END) AS last_hour,
+             COUNT(CASE WHEN processed_at >= ? THEN 1 END) AS since_midnight,
+             COUNT(CASE WHEN processed_at >= ? THEN 1 END) AS last_24h
+           FROM copied_messages
+           WHERE status = 'copied'""",
+        (cutoff_hour, cutoff_midnight, cutoff_24h),
+    ).fetchone()
+    if not row:
+        return {"last_hour": 0, "since_midnight": 0, "last_24h": 0}
+    return {
+        "last_hour":      row["last_hour"] or 0,
+        "since_midnight": row["since_midnight"] or 0,
+        "last_24h":       row["last_24h"] or 0,
+    }
 
 
 def get_copied_source_ids(job_id: int) -> set[int]:

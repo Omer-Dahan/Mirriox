@@ -30,6 +30,10 @@ async def dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _wizard_skip_name(update, context)
     elif data == "wzd:toggle_filter":
         await _wizard_toggle_filter(update, context)
+    elif data == "wzd:toggle_group":
+        await _wizard_toggle_group(update, context)
+    elif data == "wzd:toggle_copy_text":
+        await _wizard_toggle_copy_text(update, context)
     elif data == "wzd:confirm":
         await _wizard_confirm(update, context)
     elif data.startswith("wzd:toggle_src:"):
@@ -189,6 +193,8 @@ def _init_wizard(context: ContextTypes.DEFAULT_TYPE) -> dict:
         "id_to": None,
         "single_id": None,
         "use_blocked_words": True,
+        "group_media": True,
+        "copy_text": True,
         "content_types": {"text", "image", "video"},
     }
     return context.user_data["wizard"]  # type: ignore[index]
@@ -234,6 +240,26 @@ async def _wizard_toggle_filter(
     if not w:
         return
     w["use_blocked_words"] = not w.get("use_blocked_words", True)
+    await _wizard_show_summary(context, w)
+
+
+async def _wizard_toggle_group(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    w = _get_wizard(context)
+    if not w:
+        return
+    w["group_media"] = not w.get("group_media", True)
+    await _wizard_show_summary(context, w)
+
+
+async def _wizard_toggle_copy_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    w = _get_wizard(context)
+    if not w:
+        return
+    w["copy_text"] = not w.get("copy_text", True)
     await _wizard_show_summary(context, w)
 
 
@@ -416,7 +442,11 @@ async def _wizard_show_summary(
 ) -> None:
     word_count = filter_repo.count()
     text = texts.wizard_summary_text(w, word_count)
-    kb = keyboards.kb_wizard_summary(w.get("use_blocked_words", True))
+    kb = keyboards.kb_wizard_summary(
+        w.get("use_blocked_words", True),
+        w.get("group_media", True),
+        w.get("copy_text", True)
+    )
     await update_main_message(context, text, kb)
 
 
@@ -462,6 +492,8 @@ async def _wizard_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 id_to=w.get("id_to"),
                 single_message_id=w.get("single_id"),
                 use_blocked_words=w.get("use_blocked_words", True),
+                group_media=w.get("group_media", True),
+                copy_text=w.get("copy_text", True),
                 content_types=content_types_str,
             )
             created.append(job)
