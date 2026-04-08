@@ -274,7 +274,7 @@ DAILY_LIMIT = 20_000
 
 
 def moon_progress_bar(percent: float, total_cells: int = 10) -> str:
-    """Moon-phase progress bar. Fills left→right: 🌑 empty, 🌒🌓🌔 partial, 🌕 full."""
+    """Moon-phase progress bar. Fills right→left (RTL): 🌑 empty, 🌒🌓🌔 partial, 🌕 full."""
     progress = max(0.0, min(100.0, percent)) / 100
     filled = progress * total_cells
     full_count = int(filled)
@@ -292,7 +292,7 @@ def moon_progress_bar(percent: float, total_cells: int = 10) -> str:
         partial = ""
         empty_count = total_cells - full_count
 
-    return "🌕" * full_count + partial + "🌑" * empty_count
+    return "🌑" * empty_count + partial + "🌕" * full_count
 
 
 def transfer_stats_text(stats: dict) -> str:

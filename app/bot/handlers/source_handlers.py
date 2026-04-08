@@ -167,11 +167,15 @@ async def handle_source_ref(
     raw = (update.message.text or "").strip()  # type: ignore[union-attr]
     try:
         ref = validation_service.validate_channel_ref(raw)
-        # Name = ref for now; worker will update it with the real title
-        source_repo.add_source(ref, ref)
-        _worker.signal_resolve_now()
-        context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
-        text, kb = renderer.render_source_list()
+        if source_repo.get_source_by_ref(ref) is not None:
+            text = f"{texts.TITLE_SOURCES}\n\n⚠️ מקור זה כבר קיים ברשימה.\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
+            kb = keyboards.kb_source_cancel()
+        else:
+            # Name = ref for now; worker will update it with the real title
+            source_repo.add_source(ref, ref)
+            _worker.signal_resolve_now()
+            context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
+            text, kb = renderer.render_source_list()
     except ValidationError as e:
         text = f"{texts.TITLE_SOURCES}\n\n⚠️ {e}\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
         kb = keyboards.kb_source_cancel()
@@ -185,11 +189,15 @@ async def handle_dest_ref(
     raw = (update.message.text or "").strip()  # type: ignore[union-attr]
     try:
         ref = validation_service.validate_channel_ref(raw)
-        # Name = ref for now; worker will update it with the real title
-        source_repo.add_destination(ref, ref)
-        _worker.signal_resolve_now()
-        context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
-        text, kb = renderer.render_dest_list()
+        if source_repo.get_destination_by_ref(ref) is not None:
+            text = f"{texts.TITLE_DESTINATIONS}\n\n⚠️ יעד זה כבר קיים ברשימה.\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
+            kb = keyboards.kb_dest_cancel()
+        else:
+            # Name = ref for now; worker will update it with the real title
+            source_repo.add_destination(ref, ref)
+            _worker.signal_resolve_now()
+            context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
+            text, kb = renderer.render_dest_list()
     except ValidationError as e:
         text = f"{texts.TITLE_DESTINATIONS}\n\n⚠️ {e}\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
         kb = keyboards.kb_dest_cancel()

@@ -19,23 +19,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     chat_id = update.effective_chat.id  # type: ignore[union-attr]
 
-    # Try to delete the previous main message
     old_msg_id_str = state_repo.get_setting("main_message_id")
     old_chat_id_str = state_repo.get_setting("main_chat_id")
-    if old_msg_id_str and old_chat_id_str:
-        try:
-            await context.bot.delete_message(
-                chat_id=int(old_chat_id_str),
-                message_id=int(old_msg_id_str),
-            )
-        except TelegramError:
-            pass  # Already gone or not accessible — that's fine
 
     # Clear any in-flight wizard state
     if context.user_data:
         context.user_data.clear()
 
-    # Send a fresh main message
+    # Send the new main message first — only then delete the old one
     text, keyboard = renderer.render_main_menu()
     msg = await context.bot.send_message(
         chat_id=chat_id,
@@ -47,6 +38,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Store the new message coordinates
     state_repo.set_setting("main_chat_id", str(chat_id))
     state_repo.set_setting("main_message_id", str(msg.message_id))
+
+    # Delete the old message only after the new one is successfully stored
+    if old_msg_id_str and old_chat_id_str:
+        try:
+            await context.bot.delete_message(
+                chat_id=int(old_chat_id_str),
+                message_id=int(old_msg_id_str),
+            )
+        except TelegramError:
+            pass  # Already gone or not accessible — that's fine
 
     # Mark that main menu is currently visible
     context.bot_data["on_main_screen"] = True
