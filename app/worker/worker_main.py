@@ -92,8 +92,41 @@ async def _async_run(config: Config) -> None:
         await _poll_loop(config, engine, client)
     finally:
         state_repo.set_worker_status("stopped")
-        await client.disconnect()
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
         logger.info("Worker stopped cleanly")
+
+
+async def _reconnect_client(client: TelegramClient) -> bool:
+    """
+    Attempt to reconnect Telethon with exponential backoff.
+    Returns True on success, False if shutdown was requested.
+    Max wait between attempts: 5 → 10 → 20 → 40 → 60s (then stays at 60s).
+    """
+    assert _shutdown_event is not None
+    delay = 5
+    max_delay = 60
+    attempt = 0
+    while not _shutdown_event.is_set():
+        attempt += 1
+        try:
+            logger.warning("Telethon reconnect attempt #%d...", attempt)
+            await client.connect()
+            if await client.is_user_authorized():
+                logger.info("Telethon reconnected successfully (attempt #%d)", attempt)
+                return True
+            logger.error("Session לא מאושר אחרי reconnect")
+            # Authorization lost is a fatal error — do not loop on it
+            return False
+        except asyncio.CancelledError:
+            return False
+        except Exception as exc:
+            logger.warning("Reconnect attempt #%d failed: %s — retrying in %ds", attempt, exc, delay)
+            await _sleep_or_shutdown(delay)
+            delay = min(delay * 2, max_delay)
+    return False
 
 
 async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient) -> None:
@@ -105,17 +138,10 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
             # Ensure Telethon is still connected (auto-reconnect after network drops)
             if not client.is_connected():
                 logger.warning("Telethon מנותק — מנסה להתחבר מחדש...")
-                try:
-                    await client.connect()
-                    if not await client.is_user_authorized():
-                        logger.error("Session לא מאושר אחרי reconnect — מחכה 30s")
-                        await _sleep_or_shutdown(30)
-                        continue
-                    logger.info("Telethon התחבר מחדש בהצלחה")
-                except Exception as reconn_exc:
-                    logger.warning("reconnect נכשל: %s — מנסה שוב בעוד 15s", reconn_exc)
-                    await _sleep_or_shutdown(15)
-                    continue
+                ok = await _reconnect_client(client)
+                if not ok:
+                    logger.error("Telethon reconnect נכשל לצמיתות — עוצר worker")
+                    break
 
             # Check for resumable job first (waiting_retry with time elapsed)
             job = job_repo.get_resumable_job()
@@ -137,6 +163,7 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                 try:
                     await engine.run_job(job)
                     state_repo.set_worker_status("idle")
+                    await _send_completion_notification(client, job.id)
 
                 except FloodWaitError as e:
                     wait_s = e.seconds
@@ -162,6 +189,11 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                             error=f"FloodWait: הגיע למקסימום ניסיונות ({max_retries})",
                         )
                         logger.error("Job #%d: max retries reached, marking failed", job.id)
+                        await _send_network_disruption_notification(
+                            client, job.id,
+                            f"FloodWait — הגיע למקסימום ניסיונות ({max_retries})",
+                            resumed=False,
+                        )
                     else:
                         job_repo.update_status(
                             job.id,
@@ -174,34 +206,60 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                     await _sleep_or_shutdown(min(total_wait, 60))
 
                 except Exception as e:
-                    logger.exception("Job #%d: unexpected error: %s", job.id, e)
-                    new_count = job_repo.increment_retry(job.id)
-                    max_retries = state_repo.get_int_setting("max_retries", 5)
-
-                    if new_count >= max_retries:
-                        job_repo.update_status(
-                            job.id, "failed", error=str(e)[:500]
-                        )
-                        logger.error("Job #%d: max retries reached, marking failed", job.id)
-                    else:
-                        # Exponential backoff: 60s, 120s, 240s, 480s … capped at 10 min
-                        backoff_s = min(60 * (2 ** (new_count - 1)), 600)
-                        retry_at = (
-                            datetime.utcnow() + timedelta(seconds=backoff_s)
-                        ).strftime("%Y-%m-%d %H:%M:%S")
+                    if _is_network_error(e):
+                        # Network dropped mid-job: reconnect and resume automatically
                         logger.warning(
-                            "Job #%d: retry #%d/%d — backoff %ds, resumes at %s",
-                            job.id, new_count, max_retries, backoff_s, retry_at,
+                            "Job #%d: network error mid-job (%s) — reconnecting and resuming...",
+                            job.id, e,
                         )
-                        job_repo.update_status(
-                            job.id,
-                            "waiting_retry",
-                            error=str(e)[:500],
-                            next_retry_at=retry_at,
+                        # Re-queue as pending so it resumes from last checkpoint
+                        job_repo.update_status(job.id, "pending")
+                        state_repo.set_worker_status("idle")
+
+                        # Notify user that a disruption occurred
+                        await _send_network_disruption_notification(
+                            client, job.id, str(e)[:200], reconnecting=True
                         )
 
-                    state_repo.set_worker_status("idle")
-                    await _sleep_or_shutdown(5)
+                        # Reconnect loop
+                        ok = await _reconnect_client(client)
+                        if ok:
+                            logger.info("Job #%d: reconnected — will resume on next poll cycle", job.id)
+                            await _send_network_disruption_notification(
+                                client, job.id, str(e)[:200], resumed=True
+                            )
+                        else:
+                            logger.error("Job #%d: reconnect failed — job stays pending for next startup", job.id)
+                        await _sleep_or_shutdown(3)
+                    else:
+                        logger.exception("Job #%d: unexpected error: %s", job.id, e)
+                        new_count = job_repo.increment_retry(job.id)
+                        max_retries = state_repo.get_int_setting("max_retries", 5)
+
+                        if new_count >= max_retries:
+                            job_repo.update_status(
+                                job.id, "failed", error=str(e)[:500]
+                            )
+                            logger.error("Job #%d: max retries reached, marking failed", job.id)
+                        else:
+                            # Exponential backoff: 60s, 120s, 240s, 480s … capped at 10 min
+                            backoff_s = min(60 * (2 ** (new_count - 1)), 600)
+                            retry_at = (
+                                datetime.utcnow() + timedelta(seconds=backoff_s)
+                            ).strftime("%Y-%m-%d %H:%M:%S")
+                            logger.warning(
+                                "Job #%d: retry #%d/%d — backoff %ds, resumes at %s",
+                                job.id, new_count, max_retries, backoff_s, retry_at,
+                            )
+                            job_repo.update_status(
+                                job.id,
+                                "waiting_retry",
+                                error=str(e)[:500],
+                                next_retry_at=retry_at,
+                            )
+
+                        state_repo.set_worker_status("idle")
+                        await _sleep_or_shutdown(5)
             else:
                 state_repo.heartbeat()
                 if _resolve_trigger is not None:
@@ -296,6 +354,133 @@ def _startup_recovery() -> None:
         logger.info("Recovery: no action needed")
 
     state_repo.set_worker_status("idle")
+
+
+_NETWORK_ERROR_HINTS = (
+    "getaddrinfo failed",
+    "ConnectError",
+    "ConnectionError",
+    "ConnectionResetError",
+    "ConnectionAbortedError",
+    "RemoteProtocolError",
+    "ReadError",
+    "NetworkError",
+    "TimeoutError",
+    "WinError 1231",
+    "WinError 1232",
+    "WinError 1236",
+    "WinError 10022",
+    "WinError 10060",
+    "WinError 10061",
+    "Network is unreachable",
+    "Connection refused",
+    "Server disconnected",
+    "OSError",
+)
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    msg = f"{type(exc).__name__}: {exc}"
+    return any(hint in msg for hint in _NETWORK_ERROR_HINTS)
+
+
+async def _send_network_disruption_notification(
+    client: TelegramClient,
+    job_id: int,
+    error_msg: str,
+    *,
+    reconnecting: bool = False,
+    resumed: bool = False,
+) -> None:
+    """
+    Notify the admin chat about a network disruption mid-job.
+    Called with reconnecting=True when the drop is first detected,
+    and with resumed=True once the connection is restored.
+    """
+    from app.repositories import state_repo
+
+    chat_id_str = state_repo.get_setting("main_chat_id")
+    if not chat_id_str:
+        return
+    try:
+        chat_id = int(chat_id_str)
+    except (ValueError, TypeError):
+        return
+
+    job = job_repo.get_by_id(job_id)
+    job_name = job.name if job else f"#{job_id}"
+
+    if resumed:
+        text = (
+            f"✅ <b>ניתוק רשת — חובר מחדש</b>\n\n"
+            f"📋 משימה: <b>{job_name}</b>\n"
+            f"▶️ המשימה ממשיכה מנקודת ה-checkpoint האחרונה."
+        )
+    elif reconnecting:
+        text = (
+            f"⚠️ <b>ניתוק רשת במהלך משימה</b>\n\n"
+            f"📋 משימה: <b>{job_name}</b>\n"
+            f"🔌 הניתוק הופסק ב-checkpoint האחרון.\n"
+            f"🔄 מנסה להתחבר מחדש אוטומטית..."
+        )
+    else:
+        text = (
+            f"❌ <b>ניתוק רשת — משימה נכשלה</b>\n\n"
+            f"📋 משימה: <b>{job_name}</b>\n"
+            f"💬 פרטים: {error_msg}"
+        )
+
+    try:
+        await client.send_message(chat_id, text, parse_mode="html")
+        logger.info("Job #%d: network disruption notification sent (resumed=%s)", job_id, resumed)
+    except Exception as e:
+        logger.warning("Job #%d: failed to send disruption notification: %s", job_id, e)
+
+
+async def _send_completion_notification(client: TelegramClient, job_id: int) -> None:
+    """Send job summary to the admin chat via userbot after a job ends."""
+    from app.repositories import state_repo, source_repo
+
+    chat_id_str = state_repo.get_setting("main_chat_id")
+    if not chat_id_str:
+        return
+    try:
+        chat_id = int(chat_id_str)
+    except (ValueError, TypeError):
+        return
+
+    job = job_repo.get_by_id(job_id)
+    if not job or job.status not in ("completed", "failed"):
+        return
+
+    src = source_repo.get_source_by_id(job.source_id)
+    dst = source_repo.get_destination_by_id(job.destination_id)
+    src_str = src.display() if src else f"#{job.source_id}"
+    dst_str = dst.display() if dst else f"#{job.destination_id}"
+
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    status_emoji = "✅" if job.status == "completed" else "❌"
+    status_word = "הושלמה" if job.status == "completed" else "נכשלה"
+
+    report_line = ""
+    if job.report_url:
+        report_line = f'\n\n📋 <a href="{job.report_url}">דוח שגיאות / דילוגים</a>'
+
+    text = (
+        f"{status_emoji} <b>{_esc(job.name)}</b> — {status_word}\n\n"
+        f"📡 מקור: {_esc(src_str)}\n"
+        f"📤 יעד: {_esc(dst_str)}\n\n"
+        f"📊 הועתקו: {job.copied_count:,} | דולגו: {job.skipped_count:,} | נכשלו: {job.failed_count:,}"
+        f"{report_line}"
+    )
+
+    try:
+        await client.send_message(chat_id, text, parse_mode="html")
+        logger.info("Job #%d: completion notification sent to chat %d", job_id, chat_id)
+    except Exception as e:
+        logger.warning("Job #%d: completion notification failed: %s", job_id, e)
 
 
 async def _resolve_pending_channels(client: TelegramClient) -> None:

@@ -113,6 +113,7 @@ def job_detail_text(
     job: "Job",
     source: "Source | None",
     dest: "Destination | None",
+    queue_position: "int | None" = None,
 ) -> str:
     src_str = source.display() if source else f"[#{job.source_id}]"
     dst_str = dest.display() if dest else f"[#{job.destination_id}]"
@@ -133,6 +134,8 @@ def job_detail_text(
     checkpoint = (
         f"נקודת המשך: #{job.last_processed_id}" if job.last_processed_id else "—"
     )
+
+    queue_line = f"🔢 מיקום בתור: #{queue_position}\n" if queue_position else ""
 
     retry_info = ""
     if job.status == "waiting_retry":
@@ -160,8 +163,9 @@ def job_detail_text(
         f"{params}"
         f"📁 סוגי תוכן: {ct_str}\n"
         f"🚫 סינון מילים: {filter_str}\n"
-        f"🔵 סטטוס: {status_label}\n\n"
-        f"📊 {progress}\n"
+        f"🔵 סטטוס: {status_label}\n"
+        f"{queue_line}"
+        f"\n📊 {progress}\n"
         f"📍 {checkpoint}\n"
         f"🕐 התחלה: {started} | סיום: {finished}\n"
         f"🔃 עדכון: {updated}"

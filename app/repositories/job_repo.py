@@ -198,6 +198,16 @@ def delete(job_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def get_queue_position(job_id: int) -> int:
+    """Return 1-based position of this pending job in the queue (1 = next to run)."""
+    conn = db.get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'pending' AND id <= ?",
+        (job_id,),
+    ).fetchone()
+    return row["cnt"] if row else 1
+
+
 def count_by_status() -> dict[str, int]:
     conn = db.get_connection()
     rows = conn.execute(

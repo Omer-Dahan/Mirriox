@@ -29,6 +29,9 @@ _AUTO_REFRESH_INTERVAL_S = 30
 
 logger = logging.getLogger(__name__)
 
+# Suppress noisy APScheduler execution logs
+logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
+
 
 # ── Authorization guard ────────────────────────────────────────────────────────
 

@@ -35,7 +35,8 @@ def render_job_detail(job_id: int) -> tuple[str, InlineKeyboardMarkup]:
         return texts.error_text(f"משימה #{job_id} לא נמצאה"), keyboards.kb_error_back("jobs")
     src = source_repo.get_source_by_id(job.source_id)
     dst = source_repo.get_destination_by_id(job.destination_id)
-    return texts.job_detail_text(job, src, dst), keyboards.kb_job_detail(job)
+    queue_pos = job_repo.get_queue_position(job_id) if job.status == "pending" else None
+    return texts.job_detail_text(job, src, dst, queue_pos), keyboards.kb_job_detail(job)
 
 
 def render_job_confirm_delete(job: "Job") -> tuple[str, InlineKeyboardMarkup]:

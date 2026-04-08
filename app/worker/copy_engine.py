@@ -111,10 +111,11 @@ class CopyEngine:
         # Buffer for grouping individually-sent photos/videos into albums (group_media feature)
         solo_media_buffer: list[Message] = []
 
-        async def flush_solo_media() -> None:
+        async def flush_solo_media() -> bool:
+            """Flush solo media buffer. Returns True if job is now paused (caller must stop)."""
             nonlocal copied, skipped, failed, solo_media_buffer, src_is_protected
             if not solo_media_buffer:
-                return
+                return False
             buffer = solo_media_buffer[:]
             solo_media_buffer = []
             last_id = buffer[-1].id
@@ -139,11 +140,11 @@ class CopyEngine:
 
             if not to_send:
                 job_repo.update_progress(job.id, copied, skipped, failed, last_id)
-                return
+                return False
 
-            if len(to_send) == 1:
-                m = to_send[0]
-                status, reason = "failed", None
+            async def _send_single(m: Message) -> tuple[str, str | None]:
+                """Forward one message; returns (status, reason). Updates src_is_protected."""
+                nonlocal src_is_protected
                 try:
                     if src_is_protected:
                         await self._send_as_copy(m, dst_entity)
@@ -155,60 +156,85 @@ class CopyEngine:
                             drop_author=True,
                             random_id=[random.randint(0, 2**63)],
                         ))
-                    status, reason = "copied", None
-                    copied += 1
+                    return "copied", None
                 except ChatForwardsRestrictedError:
                     src_is_protected = True
                     try:
                         await self._send_as_copy(m, dst_entity)
-                        status, reason = "copied", None
-                        copied += 1
+                        return "copied", None
                     except FloodWaitError:
                         raise
                     except Exception as e:
-                        status, reason = "failed", str(e)[:200]
-                        failed += 1
+                        return "failed", str(e)[:200]
                 except FloodWaitError:
                     raise
                 except Exception as e:
-                    status, reason = "failed", str(e)[:200]
+                    return "failed", str(e)[:200]
+
+            if len(to_send) == 1:
+                st, reason = await _send_single(to_send[0])
+                if st == "copied":
+                    copied += 1
+                else:
                     failed += 1
-                job_repo.record_copied_message(job.id, m.id, None, status, reason)
-                already_done.add(m.id)
+                job_repo.record_copied_message(job.id, to_send[0].id, None, st, reason)
+                already_done.add(to_send[0].id)
             else:
+                # Try fast album send via file refs; fall back to individual forwards (not download)
+                album_ok = False
                 try:
-                    await self._send_group_as_copy(to_send, dst_entity)
+                    await self._send_group_by_ref(to_send, dst_entity)
+                    album_ok = True
+                    logger.info(
+                        "Job #%d: grouped %d solo media into album (ids=%s)",
+                        job.id, len(to_send), [m.id for m in to_send],
+                    )
+                except FloodWaitError:
+                    raise
+                except Exception as ref_err:
+                    logger.warning(
+                        "Job #%d: album ref-send failed (%s) — falling back to %d individual sends",
+                        job.id, ref_err, len(to_send),
+                    )
+
+                if album_ok:
                     for m in to_send:
                         job_repo.record_copied_message(job.id, m.id, None, "copied", None)
                         already_done.add(m.id)
                         copied += 1
-                    logger.debug("Job #%d: grouped %d solo media into album", job.id, len(to_send))
-                except FloodWaitError:
-                    raise
-                except Exception as e:
-                    err = str(e)[:200]
+                else:
                     for m in to_send:
-                        job_repo.record_copied_message(job.id, m.id, None, "failed", err)
+                        st, reason = await _send_single(m)
+                        if st == "copied":
+                            copied += 1
+                        else:
+                            failed += 1
+                            logger.warning(
+                                "Job #%d: failed to send msg #%d individually: %s",
+                                job.id, m.id, reason,
+                            )
+                        job_repo.record_copied_message(job.id, m.id, None, st, reason)
                         already_done.add(m.id)
-                        failed += 1
 
             job_repo.update_progress(job.id, copied, skipped, failed, last_id)
             if job_repo.is_paused(job.id):
                 logger.info("Job #%d: pause requested after media flush at #%d", job.id, last_id)
-                return
+                return True
             await self._rate_limiter.wait()
+            return False
 
-        async def flush_group() -> None:
+        async def flush_group() -> bool:
+            """Flush pending album group. Returns True if job is now paused (caller must stop)."""
             nonlocal copied, skipped, failed, pending_group, current_group_id, src_is_protected
             if not pending_group:
-                return
+                return False
             group = pending_group
             pending_group = []
             current_group_id = None
 
             # Skip group if the first message was already processed
             if group[0].id in already_done:
-                return
+                return False
 
             statuses, src_is_protected = await self._process_group(
                 job, group, blocked_words, src_entity, dst_entity, src_is_protected
@@ -232,7 +258,11 @@ class CopyEngine:
                     failed += 1
 
             job_repo.update_progress(job.id, copied, skipped, failed, last_id)
+            if job_repo.is_paused(job.id):
+                logger.info("Job #%d: pause requested after album flush at #%d", job.id, last_id)
+                return True
             await self._rate_limiter.wait()
+            return False
 
         try:
             async for msg in self._fetch_messages(job, src_entity):
@@ -242,27 +272,32 @@ class CopyEngine:
                 if msg.grouped_id:
                     # Existing album: flush solo buffer first, then accumulate
                     if group_media:
-                        await flush_solo_media()
+                        if await flush_solo_media():
+                            return
                     if msg.grouped_id == current_group_id:
                         pending_group.append(msg)
                     else:
-                        await flush_group()
+                        if await flush_group():
+                            return
                         current_group_id = msg.grouped_id
                         pending_group = [msg]
                 else:
                     # Individual message: flush any pending album group first
-                    await flush_group()
+                    if await flush_group():
+                        return
 
                     if group_media and self._is_groupable(msg):
                         # Add to solo buffer (skip if already done)
                         if msg.id not in already_done:
                             solo_media_buffer.append(msg)
                         if len(solo_media_buffer) >= 10:
-                            await flush_solo_media()
+                            if await flush_solo_media():
+                                return
                     else:
                         # Non-groupable: flush solo buffer, then process normally
                         if group_media:
-                            await flush_solo_media()
+                            if await flush_solo_media():
+                                return
 
                         if msg.id in already_done:
                             continue
@@ -304,9 +339,11 @@ class CopyEngine:
                         await self._rate_limiter.wait()
 
             # Flush any remaining buffers at end of stream
-            await flush_group()
+            if await flush_group():
+                return
             if group_media:
-                await flush_solo_media()
+                if await flush_solo_media():
+                    return
 
         except FloodWaitError:
             logger.warning("Job #%d: FloodWait encountered", job.id)
@@ -330,6 +367,8 @@ class CopyEngine:
 
         # Generate Telegraph report for notable (failed / unexpected-skipped) messages
         report_msgs = job_repo.get_report_messages(job.id)
+        if not report_msgs:
+            logger.info("Job #%d: no notable messages — Telegraph report skipped", job.id)
         if report_msgs:
             from app.services import telegraph_service
             url = await telegraph_service.create_report(
@@ -429,7 +468,7 @@ class CopyEngine:
                 drop_author=True,
                 random_id=[random.randint(0, 2**63) for _ in ids],
             ))
-            logger.debug(
+            logger.info(
                 "Job #%d: forwarded album of %d items (ids=%s)",
                 job.id, len(ids), ids,
             )
@@ -589,6 +628,16 @@ class CopyEngine:
                 )
             elif type_name == "MessageMediaDocument":
                 d = m.media.document
+                if not d:
+                    continue
+                # Only regular videos in albums — skip GIFs, round notes, plain docs
+                is_regular_video = any(
+                    attr.__class__.__name__ == "DocumentAttributeVideo"
+                    and not getattr(attr, "round_message", False)
+                    for attr in d.attributes
+                )
+                if not is_regular_video:
+                    continue
                 input_media = InputMediaDocument(
                     id=InputDocument(id=d.id, access_hash=d.access_hash, file_reference=d.file_reference)
                 )
@@ -616,7 +665,7 @@ class CopyEngine:
         except FloodWaitError:
             raise
         except Exception as e:
-            logger.debug("send_group_by_ref failed (%s) — falling back to download+upload", e)
+            logger.warning("Job: send_group_by_ref failed (%s) — falling back to download+upload", e)
 
         # Fallback: download and re-upload
         files: list[bytes] = []
@@ -642,7 +691,9 @@ class CopyEngine:
 
     @staticmethod
     def _is_groupable(msg: Message) -> bool:
-        """True if this message can be added to a Telegram media album (photo or video)."""
+        """True if this message can be added to a Telegram media album.
+        Only photos and regular videos — NOT GIFs/animations or round-video notes,
+        which cause MEDIA_INVALID in SendMultiMediaRequest."""
         if not msg.media or isinstance(msg.media, MessageMediaUnsupported):
             return False
         type_name = msg.media.__class__.__name__
@@ -652,9 +703,10 @@ class CopyEngine:
             doc = msg.media.document
             if doc:
                 for attr in doc.attributes:
-                    cls = attr.__class__.__name__
-                    if cls in ("DocumentAttributeVideo", "DocumentAttributeAnimated"):
-                        return True
+                    if attr.__class__.__name__ == "DocumentAttributeVideo":
+                        # Exclude round-video notes (video_note=True / round_message=True)
+                        if not getattr(attr, "round_message", False):
+                            return True
         return False
 
     @staticmethod
