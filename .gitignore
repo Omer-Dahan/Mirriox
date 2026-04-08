@@ -22,6 +22,7 @@ Thumbs.db
 
 # Documentation (as per user rules)
 *.md
+!README.md
 
 # Application Data & Database
 *.db
