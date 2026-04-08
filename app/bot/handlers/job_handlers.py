@@ -1,4 +1,5 @@
 """Job lifecycle and creation wizard handlers."""
+# pylint: disable=unused-argument  # PTB handler callbacks require (update, context) even when unused
 from __future__ import annotations
 
 import logging
@@ -509,7 +510,7 @@ async def handle_job_date_from(
         return
     raw = (update.message.text or "").strip()  # type: ignore[union-attr]
     try:
-        dt = validation_service._parse_date(raw, "תאריך התחלה")
+        validation_service.parse_date(raw, "תאריך התחלה")
         w["date_from"] = raw
         context.user_data["awaiting_input"] = "job_date_to"  # type: ignore[index]
         text, kb = renderer.render_wizard_step(

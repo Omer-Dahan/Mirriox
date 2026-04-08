@@ -1,4 +1,5 @@
 """Handlers for source and destination management screens."""
+# pylint: disable=unused-argument  # PTB handler callbacks require (update, context) even when unused
 from __future__ import annotations
 
 import asyncio
@@ -45,7 +46,7 @@ async def _dispatch_src_action(
             source_repo.reset_source_for_refresh(src_id)
             _worker.signal_resolve_now()
             # Show loading state
-            loading_text = f"{texts.TITLE_SOURCE_DETAIL}: <b>{texts._esc(src.name)}</b>\n\n⏳ מאחזר מידע…"
+            loading_text = f"{texts.TITLE_SOURCE_DETAIL}: <b>{texts.esc(src.name)}</b>\n\n⏳ מאחזר מידע…"
             await update_main_message(context, loading_text, renderer.render_source_detail(src_id)[1])
             # Wait for worker to finish fetching extra info (up to 12 seconds)
             # Break on channel_type (set at end of _fetch_channel_extra_info), not resolved_id
@@ -118,7 +119,7 @@ async def _dispatch_dst_action(
             source_repo.reset_destination_for_refresh(dst_id)
             _worker.signal_resolve_now()
             # Show loading state
-            loading_text = f"{texts.TITLE_DEST_DETAIL}: <b>{texts._esc(dst.name)}</b>\n\n⏳ מאחזר מידע…"
+            loading_text = f"{texts.TITLE_DEST_DETAIL}: <b>{texts.esc(dst.name)}</b>\n\n⏳ מאחזר מידע…"
             await update_main_message(context, loading_text, renderer.render_dest_detail(dst_id)[1])
             # Wait for worker to finish fetching extra info (up to 12 seconds)
             for _ in range(12):

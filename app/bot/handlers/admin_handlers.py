@@ -1,4 +1,5 @@
 """Handlers for admin management and settings screens."""
+# pylint: disable=unused-argument  # PTB handler callbacks require (update, context) even when unused
 from __future__ import annotations
 
 import logging
@@ -109,7 +110,7 @@ async def handle_setting_value(
     key = context.user_data.pop("setting_key", None)  # type: ignore[union-attr]
     raw = (update.message.text or "").strip()  # type: ignore[union-attr]
 
-    LIMITS = {
+    _limits = {
         "min_delay_ms":         (100,  60000),
         "max_delay_ms":         (100,  60000),
         "flood_wait_buffer_s":  (0,    300),
@@ -123,7 +124,7 @@ async def handle_setting_value(
         return
 
     label = texts.SETTINGS_LABELS.get(key, key)
-    min_v, max_v = LIMITS.get(key, (0, 999999))
+    min_v, max_v = _limits.get(key, (0, 999999))
 
     try:
         val = validation_service.validate_positive_int_setting(raw, label, min_v, max_v)
@@ -131,6 +132,6 @@ async def handle_setting_value(
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
         text, kb = renderer.render_settings()
     except ValidationError as e:
-        text = f"{texts.TITLE_SETTINGS}\n\n⚠️ {e}\n\n{texts.prompt_setting(key).split(chr(10))[-1]}"
+        text = f"{texts.TITLE_SETTINGS}\n\n⚠️ {e}\n\n{texts.prompt_setting(key).rsplit(chr(10), maxsplit=1)[-1]}"
         kb = keyboards.kb_setting_cancel()
     await update_main_message(context, text, kb)

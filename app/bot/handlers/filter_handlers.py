@@ -1,4 +1,5 @@
 """Handlers for blocked words management."""
+# pylint: disable=unused-argument  # PTB handler callbacks require (update, context) even when unused
 from __future__ import annotations
 
 import logging

@@ -85,7 +85,7 @@ def main_menu_text(worker_status: str, active_job: "Job | None") -> str:
     ws_label = WORKER_STATUS_LABELS.get(worker_status, worker_status)
     if active_job:
         job_line = (
-            f"📋 משימה פעילה: <b>{_esc(active_job.name)}</b> "
+            f"📋 משימה פעילה: <b>{esc(active_job.name)}</b> "
             f"[{STATUS_LABELS.get(active_job.status, active_job.status)}]\n"
             f"   הועתקו: {active_job.copied_count} | דולגו: {active_job.skipped_count}"
         )
@@ -145,7 +145,7 @@ def job_detail_text(
 
     error_info = ""
     if job.error_message:
-        error_info = f"\n⚠️ שגיאה אחרונה:\n<code>{_esc(job.error_message[:200])}</code>"
+        error_info = f"\n⚠️ שגיאה אחרונה:\n<code>{esc(job.error_message[:200])}</code>"
 
     started = _fmt_dt(job.started_at) if job.started_at else "—"
     finished = _fmt_dt(job.completed_at) if job.completed_at else "—"
@@ -156,9 +156,9 @@ def job_detail_text(
         report_line = f"\n📋 <a href=\"{job.report_url}\">דוח שגיאות / דילוגים</a>"
 
     return (
-        f"{TITLE_JOB_DETAIL}: <b>{_esc(job.name)}</b>\n\n"
-        f"📡 מקור: {_esc(src_str)}\n"
-        f"📤 יעד: {_esc(dst_str)}\n"
+        f"{TITLE_JOB_DETAIL}: <b>{esc(job.name)}</b>\n\n"
+        f"📡 מקור: {esc(src_str)}\n"
+        f"📤 יעד: {esc(dst_str)}\n"
         f"🔧 מצב: {mode_label}\n"
         f"{params}"
         f"📁 סוגי תוכן: {ct_str}\n"
@@ -190,15 +190,15 @@ def _mode_params_text(job: "Job") -> str:
 def wizard_header(step: int, total: int, partial: dict) -> str:
     lines = [f"<b>שלב {step}/{total}</b>"]
     if partial.get("name"):
-        lines.append(f"שם: {_esc(partial['name'])}")
+        lines.append(f"שם: {esc(partial['name'])}")
     names = partial.get("source_names", [])
     if names:
         if len(names) == 1:
-            lines.append(f"מקור: {_esc(names[0])}")
+            lines.append(f"מקור: {esc(names[0])}")
         else:
             lines.append(f"מקורות: {len(names)} נבחרו")
     if partial.get("dest_name"):
-        lines.append(f"יעד: {_esc(partial['dest_name'])}")
+        lines.append(f"יעד: {esc(partial['dest_name'])}")
     if partial.get("mode"):
         lines.append(f"מצב: {MODE_LABELS.get(partial['mode'], partial['mode'])}")
     return "\n".join(lines)
@@ -245,17 +245,17 @@ def wizard_summary_text(partial: dict, word_count: int) -> str:
 
     src_names = partial.get("source_names", [])
     if len(src_names) == 1:
-        src_str = _esc(src_names[0])
+        src_str = esc(src_names[0])
     elif len(src_names) > 1:
-        src_str = f"{len(src_names)} מקורות: " + ", ".join(_esc(n) for n in src_names)
+        src_str = f"{len(src_names)} מקורות: " + ", ".join(esc(n) for n in src_names)
     else:
         src_str = "?"
 
     return (
         f"{TITLE_NEW_JOB}\n\n"
-        f"📝 שם: <b>{_esc(partial.get('name','?'))}</b>\n"
+        f"📝 שם: <b>{esc(partial.get('name','?'))}</b>\n"
         f"📡 מקור: {src_str}\n"
-        f"📤 יעד: {_esc(partial.get('dest_name','?'))}\n"
+        f"📤 יעד: {esc(partial.get('dest_name','?'))}\n"
         f"🔧 מצב: {mode_label}{params}\n"
         f"📁 סוגי תוכן: {content_types_str}\n"
         f"🚫 סינון מילים: {filter_status}\n\n"
@@ -274,11 +274,11 @@ def source_list_text(sources: list["Source"]) -> str:
 def source_detail_text(source: "Source") -> str:
     title = source.title or "—"
     rid = str(source.resolved_id) if source.resolved_id else "⏳ ממתין לאימות"
-    status = "✅ נגיש" if source.resolved_id else ("❌ " + _esc(source.validation_error) if source.validation_error else "⏳ טרם אומת")
+    status = "✅ נגיש" if source.resolved_id else ("❌ " + esc(source.validation_error) if source.validation_error else "⏳ טרם אומת")
     return (
-        f"{TITLE_SOURCE_DETAIL}: <b>{_esc(source.name)}</b>\n\n"
-        f"הפניה: <code>{_esc(source.channel_ref)}</code>\n"
-        f"כותרת: {_esc(title)}\n"
+        f"{TITLE_SOURCE_DETAIL}: <b>{esc(source.name)}</b>\n\n"
+        f"הפניה: <code>{esc(source.channel_ref)}</code>\n"
+        f"כותרת: {esc(title)}\n"
         f"מזהה: {rid}\n"
         f"גישה: {status}\n"
         + _channel_extra_lines(source) +
@@ -295,11 +295,11 @@ def dest_list_text(dests: list["Destination"]) -> str:
 def dest_detail_text(dest: "Destination") -> str:
     title = dest.title or "—"
     rid = str(dest.resolved_id) if dest.resolved_id else "⏳ ממתין לאימות"
-    status = "✅ נגיש" if dest.resolved_id else ("❌ " + _esc(dest.validation_error) if dest.validation_error else "⏳ טרם אומת")
+    status = "✅ נגיש" if dest.resolved_id else ("❌ " + esc(dest.validation_error) if dest.validation_error else "⏳ טרם אומת")
     return (
-        f"{TITLE_DEST_DETAIL}: <b>{_esc(dest.name)}</b>\n\n"
-        f"הפניה: <code>{_esc(dest.channel_ref)}</code>\n"
-        f"כותרת: {_esc(title)}\n"
+        f"{TITLE_DEST_DETAIL}: <b>{esc(dest.name)}</b>\n\n"
+        f"הפניה: <code>{esc(dest.channel_ref)}</code>\n"
+        f"כותרת: {esc(title)}\n"
         f"מזהה: {rid}\n"
         f"גישה: {status}\n"
         + _channel_extra_lines(dest) +
@@ -311,17 +311,17 @@ def _channel_extra_lines(ch) -> str:
     """Build extra-info lines for a Source or Destination. Returns a string ending with \n."""
     lines = ""
     if ch.channel_type:
-        lines += f"סוג: {_esc(ch.channel_type)}"
+        lines += f"סוג: {esc(ch.channel_type)}"
         if ch.verified:
             lines += " ✅ מאומת"
         lines += "\n"
     if ch.username:
-        lines += f"@: @{_esc(ch.username)}\n"
+        lines += f"@: @{esc(ch.username)}\n"
     if ch.participants_count is not None:
         lines += f"👥 מנויים: {ch.participants_count:,}\n"
     if ch.about:
         about_short = ch.about[:120] + ("…" if len(ch.about) > 120 else "")
-        lines += f"📝 תיאור: {_esc(about_short)}\n"
+        lines += f"📝 תיאור: {esc(about_short)}\n"
     if ch.total_messages is not None or ch.photos_count is not None:
         stats = []
         if ch.total_messages is not None:
@@ -353,7 +353,7 @@ def blocked_words_text(words: list["BlockedWord"]) -> str:
         return f"{TITLE_BLOCKED_WORDS}\n\nאין מילים חסומות."
     lines = [f"{TITLE_BLOCKED_WORDS}\n", f"סה\"כ: {len(words)} מילים\n"]
     for w in words:
-        lines.append(f"• {_esc(w.word)}")
+        lines.append(f"• {esc(w.word)}")
     return "\n".join(lines)
 
 
@@ -403,7 +403,7 @@ def settings_text(settings: dict[str, str]) -> str:
     lines = [f"{TITLE_SETTINGS}\n"]
     for key, label in SETTINGS_LABELS.items():
         val = settings.get(key, "—")
-        lines.append(f"• {label}: <b>{_esc(val)}</b>")
+        lines.append(f"• {label}: <b>{esc(val)}</b>")
     for key, label in TOGGLE_SETTINGS.items():
         is_on = settings.get(key, "1") == "1"
         status = "✅ פעיל" if is_on else "❌ כבוי"
@@ -419,13 +419,13 @@ def prompt_setting(key: str) -> str:
 # ── Errors and confirmations ───────────────────────────────────────────────────
 
 def error_text(msg: str) -> str:
-    return f"{TITLE_ERROR}\n\n{_esc(msg)}"
+    return f"{TITLE_ERROR}\n\n{esc(msg)}"
 
 
 def confirm_delete_job_text(job_name: str) -> str:
     return (
         f"{TITLE_CONFIRM_DELETE}\n\n"
-        f"האם למחוק את המשימה <b>{_esc(job_name)}</b>?\n"
+        f"האם למחוק את המשימה <b>{esc(job_name)}</b>?\n"
         "פעולה זו אינה הפיכה."
     )
 
@@ -433,13 +433,13 @@ def confirm_delete_job_text(job_name: str) -> str:
 def confirm_cancel_job_text(job_name: str) -> str:
     return (
         f"{TITLE_CONFIRM_CANCEL}\n\n"
-        f"האם לבטל את המשימה <b>{_esc(job_name)}</b>?"
+        f"האם לבטל את המשימה <b>{esc(job_name)}</b>?"
     )
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
 
-def _esc(text: str | None) -> str:
+def esc(text: str | None) -> str:
     """Escape HTML special characters."""
     if text is None:
         return ""

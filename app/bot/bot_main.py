@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 from app.config import Config
-from app.repositories import admin_repo, state_repo
+from app.repositories import admin_repo
 from app.bot.handlers import (
     start_handler,
     job_handlers,
@@ -41,7 +41,7 @@ def _is_authorized(user_id: int, bootstrap_ids: list[int]) -> bool:
 
 def _auth_filter(config: Config):
     """Return a check function for the given user."""
-    async def _check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    async def _check(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> bool:
         if update.effective_user is None:
             return False
         return _is_authorized(update.effective_user.id, config.ADMIN_IDS)
@@ -94,7 +94,7 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     data: str = update.callback_query.data or ""
 
     # Track whether the main menu is currently displayed
-    context.bot_data["on_main_screen"] = (data == "menu:main")
+    context.bot_data["on_main_screen"] = data == "menu:main"
 
     try:
         if data == "menu:main":
@@ -132,7 +132,7 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             text, kb = renderer.render_error(f"שגיאה פנימית: {e}")
             await update_main_message(context, text, kb)
-        except Exception:
+        except Exception:  # nosec B110 — best-effort error display, non-fatal
             pass
 
 
@@ -151,11 +151,11 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         # No input expected — silently delete the message
         try:
             await update.message.delete()
-        except Exception:
+        except Exception:  # nosec B110 — best-effort message cleanup, non-fatal
             pass
         return
 
-    _DISPATCH: dict[str, object] = {
+    _dispatch: dict[str, object] = {
         "job_name":      job_handlers.handle_job_name,
         "job_date_from": job_handlers.handle_job_date_from,
         "job_date_to":   job_handlers.handle_job_date_to,
@@ -171,7 +171,7 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         "setting_value": admin_handlers.handle_setting_value,
     }
 
-    handler_fn = _DISPATCH.get(awaiting)
+    handler_fn = _dispatch.get(awaiting)
     if handler_fn:
         try:
             await handler_fn(update, context)  # type: ignore[operator]
@@ -183,14 +183,14 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data.pop("awaiting_input", None)  # type: ignore[union-attr]
         try:
             await update.message.delete()
-        except Exception:
+        except Exception:  # nosec B110 — best-effort message cleanup, non-fatal
             pass
 
 
 # ── Unauthorized command handler ───────────────────────────────────────────────
 
 async def handle_unauthorized(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    _update: Update, _context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     pass  # silent — act as if offline
 

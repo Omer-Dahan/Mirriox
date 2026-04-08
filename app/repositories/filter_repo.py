@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
-import app.db as db
+from app import db
 from app.models import BlockedWord
 
 

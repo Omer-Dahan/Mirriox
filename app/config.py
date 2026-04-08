@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,8 +30,8 @@ def load_config() -> Config:
         raise ValueError("TELETHON_API_ID is required")
     try:
         api_id = int(api_id_raw)
-    except ValueError:
-        raise ValueError("TELETHON_API_ID must be an integer")
+    except ValueError as exc:
+        raise ValueError("TELETHON_API_ID must be an integer") from exc
 
     api_hash = os.environ.get("TELETHON_API_HASH", "").strip()
     if not api_hash:
@@ -44,8 +44,8 @@ def load_config() -> Config:
         raise ValueError("ADMIN_IDS must contain at least one Telegram user ID")
     try:
         admin_ids = [int(x.strip()) for x in admin_ids_raw.split(",") if x.strip()]
-    except ValueError:
-        raise ValueError("ADMIN_IDS must be comma-separated integers")
+    except ValueError as exc:
+        raise ValueError("ADMIN_IDS must be comma-separated integers") from exc
     if not admin_ids:
         raise ValueError("ADMIN_IDS must contain at least one Telegram user ID")
 

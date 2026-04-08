@@ -1,4 +1,5 @@
 """Core copy logic using Telethon. Executes a single job end-to-end."""
+# pylint: disable=too-many-branches,too-many-statements,too-many-locals
 from __future__ import annotations
 
 import logging
@@ -17,7 +18,6 @@ from telethon.tl.functions.messages import ForwardMessagesRequest
 from telethon.tl.types import (
     Message,
     MessageMediaUnsupported,
-    DocumentAttributeFilename,
 )
 
 from app.models import Job
@@ -53,11 +53,11 @@ class CopyEngine:
             return
 
         try:
-            from app.worker.worker_main import _get_entity_safe
-            src_entity = await _get_entity_safe(
+            from app.worker.telegram_utils import get_entity_safe
+            src_entity = await get_entity_safe(
                 self._client, str(src_rec.resolved_id or src_rec.channel_ref)
             )
-            dst_entity = await _get_entity_safe(
+            dst_entity = await get_entity_safe(
                 self._client, str(dst_rec.resolved_id or dst_rec.channel_ref)
             )
         except (ChannelPrivateError, ValueError) as e:
@@ -73,7 +73,7 @@ class CopyEngine:
                     getattr(src_entity, "title", src_rec.channel_ref),
                     src_entity.id,
                 )
-            except Exception:
+            except Exception:  # nosec B110 — best-effort cache update, non-fatal
                 pass
 
         if not dst_rec.resolved_id:
@@ -83,7 +83,7 @@ class CopyEngine:
                     getattr(dst_entity, "title", dst_rec.channel_ref),
                     dst_entity.id,
                 )
-            except Exception:
+            except Exception:  # nosec B110 — best-effort cache update, non-fatal
                 pass
 
         # Build dedup set from DB
@@ -154,7 +154,7 @@ class CopyEngine:
                             id=[m.id],
                             to_peer=dst_entity,
                             drop_author=True,
-                            random_id=[random.randint(0, 2**63)],
+                            random_id=[random.randint(0, 2**63)],  # nosec B311
                         ))
                     return "copied", None
                 except ChatForwardsRestrictedError:
@@ -466,7 +466,7 @@ class CopyEngine:
                 id=ids,
                 to_peer=dst_entity,
                 drop_author=True,
-                random_id=[random.randint(0, 2**63) for _ in ids],
+                random_id=[random.randint(0, 2**63) for _ in ids],  # nosec B311
             ))
             logger.info(
                 "Job #%d: forwarded album of %d items (ids=%s)",
@@ -549,7 +549,7 @@ class CopyEngine:
                 id=[msg.id],
                 to_peer=dst_entity,
                 drop_author=True,
-                random_id=[random.randint(0, 2**63)],
+                random_id=[random.randint(0, 2**63)],  # nosec B311
             ))
             return "copied", None, src_is_protected
 
@@ -584,7 +584,7 @@ class CopyEngine:
             id=[msg.id],
             to_peer=dst_entity,
             drop_author=True,
-            random_id=[random.randint(0, 2**63)],
+            random_id=[random.randint(0, 2**63)],  # nosec B311
         ))
 
     async def _send_as_copy(self, msg: Message, dst_entity) -> None:
@@ -645,7 +645,7 @@ class CopyEngine:
                 continue
             multi.append(InputSingleMedia(
                 media=input_media,
-                random_id=random.randint(0, 2**63),
+                random_id=random.randint(0, 2**63),  # nosec B311
                 message=caption,
             ))
 

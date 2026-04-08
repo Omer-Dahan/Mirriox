@@ -42,7 +42,7 @@ class RateLimiter:
         self._sent_timestamps: deque[float] = deque()
 
     def _new_batch_threshold(self) -> int:
-        return self._msg_count + random.randint(self.batch_size_min, self.batch_size_max)
+        return self._msg_count + random.randint(self.batch_size_min, self.batch_size_max)  # nosec B311
 
     def update_from_settings(self, settings: dict[str, str]) -> None:
         try:
@@ -69,11 +69,11 @@ class RateLimiter:
         self._sent_timestamps.append(now)
         self._msg_count += 1
 
-        delay_s = random.uniform(self.min_ms / 1000.0, self.max_ms / 1000.0)
+        delay_s = random.uniform(self.min_ms / 1000.0, self.max_ms / 1000.0)  # nosec B311
         await asyncio.sleep(delay_s)
 
         if self._msg_count >= self._next_batch_pause_at:
-            pause_s = random.uniform(self.batch_pause_min_s, self.batch_pause_max_s)
+            pause_s = random.uniform(self.batch_pause_min_s, self.batch_pause_max_s)  # nosec B311
             logger.info(
                 "Batch pause after %d messages — sleeping %.0fs before continuing",
                 self._msg_count, pause_s,
@@ -84,7 +84,7 @@ class RateLimiter:
 
     async def handle_flood_wait(self, seconds: int) -> None:
         """Sleep for the Telegram-required time plus a random jitter buffer."""
-        buffer = random.uniform(self.flood_buffer_min_s, self.flood_buffer_max_s)
+        buffer = random.uniform(self.flood_buffer_min_s, self.flood_buffer_max_s)  # nosec B311
         total = seconds + buffer
         logger.warning(
             "FloodWait: sleeping %.1fs  (telegram=%ds + jitter=%.1fs)",

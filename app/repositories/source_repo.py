@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
-import app.db as db
+from app import db
 from app.models import Source, Destination
 
 
@@ -94,17 +94,6 @@ def update_source_extra_info(
         (username, participants_count, about, int(verified),
          channel_type, total_messages, photos_count, videos_count, docs_count,
          source_id),
-    )
-    conn.commit()
-
-
-def update_destination_resolved(
-    dest_id: int, title: str, resolved_id: int
-) -> None:
-    conn = db.get_connection()
-    conn.execute(
-        "UPDATE destinations SET title = ?, resolved_id = ? WHERE id = ?",
-        (title, resolved_id, dest_id),
     )
     conn.commit()
 

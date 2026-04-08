@@ -48,8 +48,8 @@ def validate_date_range(from_s: str, to_s: str) -> tuple[datetime, datetime]:
     from_s = from_s.strip()
     to_s = to_s.strip()
 
-    date_from = _parse_date(from_s, "תאריך התחלה")
-    date_to = _parse_date(to_s, "תאריך סיום")
+    date_from = parse_date(from_s, "תאריך התחלה")
+    date_to = parse_date(to_s, "תאריך סיום")
 
     if date_from >= date_to:
         raise ValidationError("תאריך ההתחלה חייב להיות לפני תאריך הסיום")
@@ -57,7 +57,7 @@ def validate_date_range(from_s: str, to_s: str) -> tuple[datetime, datetime]:
     return date_from, date_to
 
 
-def _parse_date(value: str, label: str) -> datetime:
+def parse_date(value: str, label: str) -> datetime:
     for fmt in _DATE_FORMATS:
         try:
             return datetime.strptime(value, fmt)
@@ -84,8 +84,8 @@ def _parse_positive_int(value: str, label: str) -> int:
     value = value.strip()
     try:
         n = int(value)
-    except ValueError:
-        raise ValidationError(f"{label} חייב להיות מספר שלם")
+    except ValueError as exc:
+        raise ValidationError(f"{label} חייב להיות מספר שלם") from exc
     if n <= 0:
         raise ValidationError(f"{label} חייב להיות מספר חיובי")
     return n
@@ -113,8 +113,8 @@ def validate_telegram_id(id_s: str) -> int:
     id_s = id_s.strip()
     try:
         tid = int(id_s)
-    except ValueError:
-        raise ValidationError("מזהה Telegram חייב להיות מספר שלם")
+    except ValueError as exc:
+        raise ValidationError("מזהה Telegram חייב להיות מספר שלם") from exc
     if tid <= 0:
         raise ValidationError("מזהה Telegram חייב להיות מספר חיובי")
     return tid
@@ -132,8 +132,8 @@ def validate_channel_name(name: str) -> str:
 def validate_positive_int_setting(value: str, label: str, min_val: int, max_val: int) -> int:
     try:
         n = int(value.strip())
-    except ValueError:
-        raise ValidationError(f"{label} חייב להיות מספר שלם")
-    if not (min_val <= n <= max_val):
+    except ValueError as exc:
+        raise ValidationError(f"{label} חייב להיות מספר שלם") from exc
+    if n < min_val or n > max_val:
         raise ValidationError(f"{label} חייב להיות בין {min_val} ל-{max_val}")
     return n

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
-import app.db as db
+from app import db
 from app.models import Job
 
 
@@ -47,10 +47,8 @@ def get_all(status_filter: Optional[list[str]] = None) -> list[Job]:
     conn = db.get_connection()
     if status_filter:
         placeholders = ",".join("?" * len(status_filter))
-        rows = conn.execute(
-            f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY id DESC",
-            status_filter,
-        ).fetchall()
+        query = f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY id DESC"  # nosec B608
+        rows = conn.execute(query, status_filter).fetchall()
     else:
         rows = conn.execute(
             "SELECT * FROM jobs ORDER BY id DESC"

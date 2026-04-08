@@ -14,6 +14,8 @@ import asyncio
 import logging
 import os
 
+from app.network_errors import is_network_error
+
 
 class _CollapseNetworkErrors(logging.Filter):
     """
@@ -25,14 +27,14 @@ class _CollapseNetworkErrors(logging.Filter):
         "RemoteProtocolError", "ConnectionError", "ConnectionResetError",
         "TimeoutError",
     })
-    _NOISY_LOGGERS = frozenset({
+    NOISY_LOGGERS = frozenset({
         "telegram.ext.Updater",
         "telegram.ext.Application",
         "asyncio",
     })
 
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
-        if record.name not in self._NOISY_LOGGERS:
+        if record.name not in self.NOISY_LOGGERS:
             return True
         if not record.exc_info:
             return True
@@ -64,7 +66,7 @@ def _setup_logging() -> None:
 
     # Collapse noisy network-error tracebacks to single WARNING lines
     _f = _CollapseNetworkErrors()
-    for name in _CollapseNetworkErrors._NOISY_LOGGERS:
+    for name in _CollapseNetworkErrors.NOISY_LOGGERS:
         logging.getLogger(name).addFilter(_f)
 
 
@@ -83,7 +85,7 @@ def main() -> None:
     args = parser.parse_args()
 
     from app.config import load_config
-    import app.db as db
+    from app import db
 
     config = load_config()
     db.init(config.DB_PATH)
@@ -107,31 +109,6 @@ def main() -> None:
         _run_setup(config)
 
 
-_NETWORK_ERROR_HINTS = (
-    "getaddrinfo failed",
-    "ConnectError",
-    "ConnectionError",
-    "ConnectionResetError",
-    "RemoteProtocolError",
-    "ReadError",
-    "NetworkError",
-    "TimeoutError",
-    "WinError 1231",
-    "WinError 10022",
-    "WinError 10060",
-    "WinError 10061",
-    "WinError 1236",
-    "Network is unreachable",
-    "Connection refused",
-    "Server disconnected",
-    "OSError",
-)
-
-
-def _is_network_error(exc: BaseException) -> bool:
-    msg = f"{type(exc).__name__}: {exc}"
-    return any(hint in msg for hint in _NETWORK_ERROR_HINTS)
-
 
 async def _run_with_restart(name: str, coro_fn, config) -> None:
     """Wrap a long-running coroutine with automatic restart on network errors."""
@@ -142,10 +119,8 @@ async def _run_with_restart(name: str, coro_fn, config) -> None:
         try:
             await coro_fn(config)
             return  # clean exit
-        except asyncio.CancelledError:
-            raise  # shutdown requested — do not restart
         except Exception as exc:
-            if _is_network_error(exc):
+            if is_network_error(exc):
                 _logger.warning(
                     "[%s] ניתוק רשת (%s) — מנסה שוב בעוד %ds...",
                     name, exc, delay,
@@ -184,7 +159,7 @@ async def _run_all(config) -> None:
     )
 
     try:
-        done, pending = await asyncio.wait(
+        done, _ = await asyncio.wait(
             [bot_task, worker_task],
             return_when=asyncio.FIRST_EXCEPTION,
         )

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from datetime import datetime
 
 from app.models import Job, JobError
 from app.repositories import job_repo, source_repo

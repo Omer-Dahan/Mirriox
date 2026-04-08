@@ -15,8 +15,10 @@ from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 
 from app.config import Config
+from app.network_errors import is_network_error
 from app.repositories import job_repo, state_repo
 from app.worker.copy_engine import CopyEngine
+from app.worker.telegram_utils import get_entity_safe
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,6 @@ _resolve_trigger: asyncio.Event | None = None
 
 def signal_resolve_now() -> None:
     """Called from bot handlers to wake the worker for immediate channel resolution."""
-    global _resolve_trigger
     if _resolve_trigger is not None:
         _resolve_trigger.set()
 
@@ -51,8 +52,7 @@ async def _async_run(config: Config) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, _request_shutdown)
-        except NotImplementedError:
-            # Windows doesn't support add_signal_handler for all signals
+        except NotImplementedError:  # nosec B110 — intentional: Windows doesn't support add_signal_handler
             pass
 
     # Ensure session directory exists
@@ -94,7 +94,7 @@ async def _async_run(config: Config) -> None:
         state_repo.set_worker_status("stopped")
         try:
             await client.disconnect()
-        except Exception:
+        except Exception:  # nosec B110 — best-effort disconnect on shutdown
             pass
         logger.info("Worker stopped cleanly")
 
@@ -105,7 +105,8 @@ async def _reconnect_client(client: TelegramClient) -> bool:
     Returns True on success, False if shutdown was requested.
     Max wait between attempts: 5 → 10 → 20 → 40 → 60s (then stays at 60s).
     """
-    assert _shutdown_event is not None
+    if _shutdown_event is None:
+        raise RuntimeError("Worker not initialized: _async_run() must be called first")
     delay = 5
     max_delay = 60
     attempt = 0
@@ -130,7 +131,8 @@ async def _reconnect_client(client: TelegramClient) -> bool:
 
 
 async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient) -> None:
-    assert _shutdown_event is not None
+    if _shutdown_event is None:
+        raise RuntimeError("Worker not initialized: _async_run() must be called first")
     poll_interval = config.WORKER_POLL_INTERVAL_S
 
     while not _shutdown_event.is_set():
@@ -169,7 +171,7 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                     wait_s = e.seconds
                     buf_min = state_repo.get_int_setting("flood_buffer_min_s", 5)
                     buf_max = state_repo.get_int_setting("flood_buffer_max_s", 10)
-                    buffer_s = random.uniform(buf_min, buf_max)
+                    buffer_s = random.uniform(buf_min, buf_max)  # nosec B311 — timing jitter, not crypto
                     total_wait = wait_s + buffer_s
                     retry_at = (
                         datetime.utcnow() + timedelta(seconds=total_wait)
@@ -206,7 +208,7 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                     await _sleep_or_shutdown(min(total_wait, 60))
 
                 except Exception as e:
-                    if _is_network_error(e):
+                    if is_network_error(e):
                         # Network dropped mid-job: reconnect and resume automatically
                         logger.warning(
                             "Job #%d: network error mid-job (%s) — reconnecting and resuming...",
@@ -277,21 +279,21 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
 
 async def _sleep_or_shutdown(seconds: float) -> None:
     """Sleep for the given duration, waking early if shutdown or resolve trigger fires."""
-    assert _shutdown_event is not None
+    if _shutdown_event is None:
+        raise RuntimeError("Worker not initialized: _async_run() must be called first")
     waiters = {asyncio.ensure_future(_shutdown_event.wait())}
     if _resolve_trigger is not None:
         waiters.add(asyncio.ensure_future(_resolve_trigger.wait()))
-    done, pending = await asyncio.wait(waiters, timeout=seconds, return_when=asyncio.FIRST_COMPLETED)
+    _, pending = await asyncio.wait(waiters, timeout=seconds, return_when=asyncio.FIRST_COMPLETED)
     for t in pending:
         t.cancel()
         try:
             await t
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # nosec B110 — expected when cancelling pending tasks
             pass
 
 
 def _request_shutdown() -> None:
-    global _shutdown_event
     logger.info("Shutdown signal received")
     if _shutdown_event:
         _shutdown_event.set()
@@ -356,33 +358,6 @@ def _startup_recovery() -> None:
     state_repo.set_worker_status("idle")
 
 
-_NETWORK_ERROR_HINTS = (
-    "getaddrinfo failed",
-    "ConnectError",
-    "ConnectionError",
-    "ConnectionResetError",
-    "ConnectionAbortedError",
-    "RemoteProtocolError",
-    "ReadError",
-    "NetworkError",
-    "TimeoutError",
-    "WinError 1231",
-    "WinError 1232",
-    "WinError 1236",
-    "WinError 10022",
-    "WinError 10060",
-    "WinError 10061",
-    "Network is unreachable",
-    "Connection refused",
-    "Server disconnected",
-    "OSError",
-)
-
-
-def _is_network_error(exc: BaseException) -> bool:
-    msg = f"{type(exc).__name__}: {exc}"
-    return any(hint in msg for hint in _NETWORK_ERROR_HINTS)
-
 
 async def _send_network_disruption_notification(
     client: TelegramClient,
@@ -397,8 +372,6 @@ async def _send_network_disruption_notification(
     Called with reconnecting=True when the drop is first detected,
     and with resumed=True once the connection is restored.
     """
-    from app.repositories import state_repo
-
     chat_id_str = state_repo.get_setting("main_chat_id")
     if not chat_id_str:
         return
@@ -439,7 +412,7 @@ async def _send_network_disruption_notification(
 
 async def _send_completion_notification(client: TelegramClient, job_id: int) -> None:
     """Send job summary to the destination chat via userbot after a job ends."""
-    from app.repositories import state_repo, source_repo
+    from app.repositories import source_repo
 
     job = job_repo.get_by_id(job_id)
     if not job or job.status not in ("completed", "failed"):
@@ -447,10 +420,10 @@ async def _send_completion_notification(client: TelegramClient, job_id: int) -> 
 
     src = source_repo.get_source_by_id(job.source_id)
     dst = source_repo.get_destination_by_id(job.destination_id)
-    
+
     if not dst:
         return
-        
+
     target_chat = dst.resolved_id if dst.resolved_id else dst.channel_ref
 
     src_str = src.display() if src else f"#{job.source_id}"
@@ -497,7 +470,7 @@ async def _resolve_pending_channels(client: TelegramClient) -> None:
 
     for src in unresolved_sources:
         try:
-            entity = await _get_entity_safe(client, src.channel_ref)
+            entity = await get_entity_safe(client, src.channel_ref)
             title = getattr(entity, "title", src.channel_ref)
             source_repo.update_source_resolved(src.id, title, entity.id)
             source_repo.update_source_name(src.id, title)
@@ -511,7 +484,7 @@ async def _resolve_pending_channels(client: TelegramClient) -> None:
 
     for dst in unresolved_dests:
         try:
-            entity = await _get_entity_safe(client, dst.channel_ref)
+            entity = await get_entity_safe(client, dst.channel_ref)
             title = getattr(entity, "title", dst.channel_ref)
             source_repo.update_destination_resolved(dst.id, title, entity.id)
             source_repo.update_destination_name(dst.id, title)
@@ -550,63 +523,32 @@ async def _fetch_channel_extra_info(client: TelegramClient, entity) -> dict:
     try:
         msgs = await client.get_messages(entity, limit=1)
         total_messages = msgs.total
-    except Exception:
+    except Exception:  # nosec B110 — optional metadata, failure is non-fatal
         pass
     try:
         msgs = await client.get_messages(entity, limit=1, filter=InputMessagesFilterPhotos)
         photos_count = msgs.total
-    except Exception:
+    except Exception:  # nosec B110 — optional metadata, failure is non-fatal
         pass
     try:
         msgs = await client.get_messages(entity, limit=1, filter=InputMessagesFilterVideo)
         videos_count = msgs.total
-    except Exception:
+    except Exception:  # nosec B110 — optional metadata, failure is non-fatal
         pass
     try:
         msgs = await client.get_messages(entity, limit=1, filter=InputMessagesFilterDocument)
         docs_count = msgs.total
-    except Exception:
+    except Exception:  # nosec B110 — optional metadata, failure is non-fatal
         pass
 
-    return dict(
-        username=username,
-        participants_count=participants_count,
-        about=about,
-        verified=verified,
-        channel_type=channel_type,
-        total_messages=total_messages,
-        photos_count=photos_count,
-        videos_count=videos_count,
-        docs_count=docs_count,
-    )
-
-
-async def _get_entity_safe(client: TelegramClient, ref: str):
-    """
-    Resolve a channel reference to a Telethon entity.
-    Handles: @username, plain numeric ID, -100XXXXXXXXX (Bot API format).
-    """
-    import re
-    from telethon.tl.types import PeerChannel, PeerChat
-
-    ref = ref.strip()
-
-    # Bot API format: -1001234567890 → PeerChannel(1234567890)
-    if re.match(r"^-100\d+$", ref):
-        channel_id = int(ref[4:])  # strip "-100"
-        return await client.get_entity(PeerChannel(channel_id))
-
-    # Negative group ID: -1234567890 → PeerChat
-    if re.match(r"^-\d+$", ref):
-        chat_id = int(ref[1:])
-        return await client.get_entity(PeerChat(chat_id))
-
-    # Plain positive integer — treat as channel ID (PeerChannel)
-    if re.match(r"^\d+$", ref):
-        try:
-            return await client.get_entity(PeerChannel(int(ref)))
-        except Exception:
-            return await client.get_entity(int(ref))
-
-    # @username or username
-    return await client.get_entity(ref)
+    return {
+        "username": username,
+        "participants_count": participants_count,
+        "about": about,
+        "verified": verified,
+        "channel_type": channel_type,
+        "total_messages": total_messages,
+        "photos_count": photos_count,
+        "videos_count": videos_count,
+        "docs_count": docs_count,
+    }

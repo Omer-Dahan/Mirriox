@@ -26,7 +26,7 @@ def _post_sync(method: str, params: dict) -> dict:
     req = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json; charset=utf-8"}
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 — URL is hardcoded to trusted Telegraph API
         return json.loads(resp.read().decode("utf-8"))
 
 
