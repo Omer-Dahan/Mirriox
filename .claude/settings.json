@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -m pylint app/ main.py --output-format=text)",
-      "Bash(python -c ':*)",
-      "Bash(grep -v \"^$\")"
-    ]
-  }
-}
