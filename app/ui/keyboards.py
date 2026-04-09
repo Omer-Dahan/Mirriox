@@ -218,9 +218,32 @@ def kb_source_list(sources: list["Source"], page: int = 0) -> InlineKeyboardMark
 def kb_source_detail(source_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [_btn(texts.BTN_REFRESH + " מידע", f"src:{source_id}:refresh_info")],
+        [_btn(texts.BTN_SCAN_DUPES, f"src:{source_id}:scan_dupes")],
         [_btn(texts.BTN_DELETE, f"src:{source_id}:confirm_delete")],
         [_btn(texts.BTN_BACK, "menu:sources")],
     ])
+
+
+def kb_scan_report(source_id: int, status: str, has_dupes: bool, report_url: str | None = None) -> InlineKeyboardMarkup:
+    rows = []
+    if status == "running" or status == "pending":
+        rows.append([_btn(texts.BTN_REFRESH, f"src:{source_id}:view_scan")])
+    elif status == "done" and has_dupes:
+        rows.append([_btn(texts.BTN_DELETE_DUPES, f"src:{source_id}:confirm_delete_dupes")])
+        rows.append([_btn(texts.BTN_RESCAN, f"src:{source_id}:scan_dupes")])
+    elif status == "done":
+        rows.append([_btn(texts.BTN_RESCAN, f"src:{source_id}:scan_dupes")])
+    elif status == "failed":
+        rows.append([_btn(texts.BTN_RETRY_SCAN, f"src:{source_id}:scan_dupes")])
+    rows.append([_btn(texts.BTN_BACK, f"src:{source_id}:view")])
+    return InlineKeyboardMarkup(rows)
+
+
+def kb_confirm_delete_dupes(source_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        _btn(texts.BTN_YES_DELETE, f"src:{source_id}:delete_dupes"),
+        _btn(texts.BTN_CANCEL, f"src:{source_id}:view_scan"),
+    ]])
 
 
 def kb_confirm_delete_source(source_id: int) -> InlineKeyboardMarkup:

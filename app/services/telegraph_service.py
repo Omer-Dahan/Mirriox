@@ -135,3 +135,98 @@ async def create_report(
 ) -> Optional[str]:
     """Async wrapper — runs the sync call in a thread so the event loop is not blocked."""
     return await asyncio.to_thread(create_sync, job_id, messages, resolved_id, channel_ref)
+
+
+# ── Duplicates report ──────────────────────────────────────────────────────────
+
+def _format_size(size_bytes: Optional[int]) -> str:
+    if not size_bytes:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if size_bytes < 1024:
+            return f"{size_bytes:.0f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} GB"
+
+
+def _build_duplicates_content(
+    groups: list[dict],
+    get_items_fn,
+    username: Optional[str],
+    resolved_id: Optional[int],
+) -> list:
+    """Build Telegraph content nodes for duplicate groups."""
+    nodes: list = []
+    nodes.append({"tag": "p", "children": [f"סה\"כ קבוצות: {len(groups)}"]})
+
+    capped_groups = groups[:_MAX_ITEMS]
+    for idx, group in enumerate(capped_groups, 1):
+        mime = group.get("mime_type") or "unknown"
+        size_str = _format_size(group.get("file_size"))
+        count = group["total_count"]
+        label = f"{idx}. {mime}"
+        if size_str:
+            label += f" ({size_str})"
+        label += f" — ×{count} כפילויות"
+        nodes.append({"tag": "h4", "children": [label]})
+
+        items = get_items_fn(group["media_id"])
+        for i, item in enumerate(items):
+            msg_id = item["message_id"]
+            if resolved_id:
+                link = f"https://t.me/c/{resolved_id}/{msg_id}"
+            elif username:
+                ref = username.lstrip("@")
+                link = f"https://t.me/{ref}/{msg_id}"
+            else:
+                link = f"#{msg_id}"
+
+            note = " (מקורי)" if i == 0 else " (כפול)"
+            nodes.append({"tag": "p", "children": [
+                {"tag": "a", "attrs": {"href": link}, "children": [f"#{msg_id}"]},
+                note,
+            ]})
+
+    return nodes
+
+
+def create_duplicates_report_sync(
+    scan_id: int,
+    groups: list[dict],
+    get_items_fn,
+    username: Optional[str],
+    resolved_id: Optional[int],
+) -> Optional[str]:
+    """Synchronous Telegraph page creation for duplicates report. Returns URL or None."""
+    if not groups:
+        return None
+    try:
+        token = _get_or_create_token_sync()
+        content = _build_duplicates_content(groups, get_items_fn, username, resolved_id)
+        resp = _post_sync("createPage", {
+            "access_token": token,
+            "title": f"Duplicates #{scan_id}",
+            "content": content,
+            "return_content": False,
+        })
+        if resp.get("ok"):
+            return resp["result"]["url"]
+        logger.warning("Telegraph createPage (duplicates) failed: %s", resp)
+        return None
+    except Exception as exc:
+        logger.warning("Telegraph duplicates report failed for scan #%d: %s", scan_id, exc)
+        return None
+
+
+async def create_duplicates_report(
+    scan_id: int,
+    groups: list[dict],
+    get_items_fn,
+    username: Optional[str],
+    resolved_id: Optional[int],
+) -> Optional[str]:
+    """Async wrapper for duplicates report."""
+    return await asyncio.to_thread(
+        create_duplicates_report_sync,
+        scan_id, groups, get_items_fn, username, resolved_id,
+    )

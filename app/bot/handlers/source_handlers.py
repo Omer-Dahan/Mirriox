@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.models import ValidationError
-from app.repositories import source_repo
+from app.repositories import source_repo, scan_repo
 from app.services import validation_service
 from app.ui import renderer, texts, keyboards
 from app.bot.handlers._common import update_main_message, answer_callback, delete_user_message
@@ -78,6 +78,64 @@ async def _dispatch_src_action(
             source_repo.delete_source(src_id)
             text, kb = renderer.render_source_list()
         await update_main_message(context, text, kb)
+    elif action == "scan_dupes":
+        await _src_start_scan(update, context, src_id)
+    elif action == "view_scan":
+        text, kb = renderer.render_scan_report(src_id)
+        await update_main_message(context, text, kb)
+    elif action == "confirm_delete_dupes":
+        text, kb = renderer.render_confirm_delete_dupes(src_id)
+        await update_main_message(context, text, kb)
+    elif action == "delete_dupes":
+        await _src_delete_dupes(update, context, src_id)
+
+
+async def _src_start_scan(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, src_id: int
+) -> None:
+    src = source_repo.get_source_by_id(src_id)
+    if src is None:
+        text, kb = renderer.render_error("מקור לא נמצא", "sources")
+        await update_main_message(context, text, kb)
+        return
+
+    # Cancel any existing running scan for this source before creating a new one
+    existing = scan_repo.get_latest_scan(src_id)
+    if existing and existing["status"] in ("pending", "running"):
+        # Already a scan in progress — show its status
+        text, kb = renderer.render_scan_report(src_id)
+        await update_main_message(context, text, kb)
+        return
+
+    scan_repo.create_scan(src_id)
+    text, kb = renderer.render_scan_report(src_id)
+    await update_main_message(context, text, kb)
+
+
+async def _src_delete_dupes(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, src_id: int
+) -> None:
+    scan = scan_repo.get_latest_scan(src_id)
+    if scan is None or scan["status"] != "done":
+        text, kb = renderer.render_error("לא נמצאה סריקה מושלמת לערוץ זה", f"src:{src_id}:view")
+        await update_main_message(context, text, kb)
+        return
+
+    existing_del = scan_repo.get_latest_delete_job(scan["id"])
+    if existing_del and existing_del["status"] in ("pending", "running"):
+        channel_name = source_repo.get_source_by_id(src_id)
+        name = (channel_name.title or channel_name.name) if channel_name else "ערוץ"
+        text = f"🗑 <b>מחיקת כפילויות — {texts.esc(name)}</b>\n\n⏳ מחיקה כבר בתהליך..."
+        kb = keyboards.kb_scan_report(src_id, "done", True)
+        await update_main_message(context, text, kb)
+        return
+
+    scan_repo.create_delete_job(scan["id"], src_id)
+    channel_name = source_repo.get_source_by_id(src_id)
+    name = (channel_name.title or channel_name.name) if channel_name else "ערוץ"
+    text = f"🗑 <b>מחיקת כפילויות — {texts.esc(name)}</b>\n\n⏳ משימת המחיקה הועברה לביצוע..."
+    kb = keyboards.kb_scan_report(src_id, "done", True)
+    await update_main_message(context, text, kb)
 
 
 async def _src_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

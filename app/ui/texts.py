@@ -76,6 +76,11 @@ BTN_TEXT_TOGGLE_ON    = "✅ העתקת טקסט: כן"
 BTN_TEXT_TOGGLE_OFF   = "❌ העתקת טקסט: לא"
 BTN_SAVE_DRAFT      = "💾 שמור כטיוטה"
 BTN_TRANSFER_STATS  = "📊 סטטיסטיקות העברות"
+BTN_SCAN_DUPES      = "🔍 סרוק כפילויות"
+BTN_VIEW_SCAN       = "📄 הצג דוח סריקה"
+BTN_DELETE_DUPES    = "🗑 מחק כפילויות"
+BTN_RESCAN          = "🔄 סרוק מחדש"
+BTN_RETRY_SCAN      = "🔄 נסה שוב"
 
 # ── Screen titles ──────────────────────────────────────────────────────────────
 
@@ -94,6 +99,8 @@ TITLE_CONFIRM_DELETE  = "⚠️ <b>אישור מחיקה</b>"
 TITLE_CONFIRM_CANCEL  = "⚠️ <b>אישור ביטול</b>"
 TITLE_CONFIRM_CLEAR   = "⚠️ <b>אישור מחיקת כל המילים</b>"
 TITLE_ERROR           = "❌ <b>שגיאה</b>"
+TITLE_SCAN_REPORT     = "🔍 <b>דוח כפילויות</b>"
+TITLE_CONFIRM_DELETE_DUPES = "⚠️ <b>אישור מחיקת כפילויות</b>"
 
 # ── Main menu ──────────────────────────────────────────────────────────────────
 
@@ -345,6 +352,56 @@ def source_detail_text(source: "Source") -> str:
         f"גישה: {status}\n"
         + _channel_extra_lines(source) +
         f"נוסף: {_fmt_dt(source.created_at)}"
+    )
+
+
+def scan_report_text(scan: dict, channel_name: str) -> str:
+    status = scan.get("status", "")
+    scanned = scan.get("messages_scanned", 0)
+    total = scan.get("total_messages", 0)
+    groups = scan.get("duplicate_groups", 0)
+    wasted = scan.get("wasted_count", 0)
+    report_url = scan.get("report_url")
+    error = scan.get("error_msg")
+
+    header = f"{TITLE_SCAN_REPORT} — <b>{esc(channel_name)}</b>\n\n"
+
+    if status == "pending":
+        return header + "⏳ הסריקה ממתינה להתחלה..."
+
+    if status == "running":
+        pct = int(scanned / total * 100) if total else 0
+        return (
+            header
+            + f"▶️ סורק... {scanned:,} / {total:,} הודעות ({pct}%)\n"
+            + "לחץ רענן לעדכון"
+        )
+
+    if status == "failed":
+        return header + f"❌ הסריקה נכשלה\n\n{esc(error or '')}"
+
+    # done
+    if groups == 0:
+        return header + f"✅ הסריקה הושלמה\n\n📊 נסרקו: {scanned:,} הודעות\n🎉 לא נמצאו כפילויות!"
+
+    lines = [
+        header,
+        f"✅ הסריקה הושלמה\n",
+        f"📊 נסרקו: <b>{scanned:,}</b> הודעות",
+        f"🔁 קבוצות כפולות: <b>{groups:,}</b>",
+        f"🗑 ניתן למחוק: <b>{wasted:,}</b> הודעות",
+    ]
+    if report_url:
+        lines.append(f"\n📄 <a href=\"{report_url}\">דוח מפורט עם קישורים</a>")
+    return "\n".join(lines)
+
+
+def confirm_delete_dupes_text(wasted: int) -> str:
+    return (
+        f"{TITLE_CONFIRM_DELETE_DUPES}\n\n"
+        f"פעולה זו תמחק <b>{wasted:,}</b> הודעות כפולות מהערוץ.\n"
+        "ההודעה הישנה ביותר בכל קבוצה תישמר.\n\n"
+        "⚠️ פעולה זו אינה הפיכה!"
     )
 
 

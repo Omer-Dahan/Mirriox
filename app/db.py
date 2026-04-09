@@ -105,9 +105,48 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS duplicate_scans (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id        INTEGER NOT NULL REFERENCES sources(id),
+    status           TEXT NOT NULL DEFAULT 'pending'
+                     CHECK(status IN ('pending','running','done','failed')),
+    messages_scanned INTEGER DEFAULT 0,
+    total_messages   INTEGER DEFAULT 0,
+    duplicate_groups INTEGER DEFAULT 0,
+    wasted_count     INTEGER DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at     TEXT,
+    report_url       TEXT,
+    error_msg        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS duplicate_scan_items (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id     INTEGER NOT NULL REFERENCES duplicate_scans(id) ON DELETE CASCADE,
+    message_id  INTEGER NOT NULL,
+    media_id    INTEGER NOT NULL,
+    media_type  TEXT    NOT NULL CHECK(media_type IN ('document','photo')),
+    file_size   INTEGER,
+    mime_type   TEXT,
+    msg_date    TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS delete_scan_jobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id       INTEGER NOT NULL REFERENCES duplicate_scans(id),
+    source_id     INTEGER NOT NULL REFERENCES sources(id),
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK(status IN ('pending','running','done','failed')),
+    deleted_count INTEGER DEFAULT 0,
+    error_msg     TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at  TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_status        ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_copied_msg_job     ON copied_messages(job_id);
 CREATE INDEX IF NOT EXISTS idx_copied_src_id      ON copied_messages(job_id, source_message_id);
+CREATE INDEX IF NOT EXISTS idx_scan_items_media   ON duplicate_scan_items(scan_id, media_id);
 
 INSERT OR IGNORE INTO worker_state(id) VALUES(1);
 

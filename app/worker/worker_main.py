@@ -16,8 +16,9 @@ from telethon.errors import FloodWaitError
 
 from app.config import Config
 from app.network_errors import is_network_error
-from app.repositories import job_repo, state_repo
+from app.repositories import job_repo, state_repo, scan_repo
 from app.worker.copy_engine import CopyEngine
+from app.worker.scan_engine import ScanEngine
 from app.worker.telegram_utils import get_entity_safe
 
 logger = logging.getLogger(__name__)
@@ -87,9 +88,10 @@ async def _async_run(config: Config) -> None:
     logger.info("Worker ready. Polling for jobs every %ds...", config.WORKER_POLL_INTERVAL_S)
 
     engine = CopyEngine(client)
+    scan_engine = ScanEngine(client)
 
     try:
-        await _poll_loop(config, engine, client)
+        await _poll_loop(config, engine, scan_engine, client)
     finally:
         state_repo.set_worker_status("stopped")
         try:
@@ -130,7 +132,7 @@ async def _reconnect_client(client: TelegramClient) -> bool:
     return False
 
 
-async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient) -> None:
+async def _poll_loop(config: Config, engine: CopyEngine, scan_engine: ScanEngine, client: TelegramClient) -> None:
     if _shutdown_event is None:
         raise RuntimeError("Worker not initialized: _async_run() must be called first")
     poll_interval = config.WORKER_POLL_INTERVAL_S
@@ -271,6 +273,34 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                         state_repo.set_worker_status("idle")
                         await _sleep_or_shutdown(5)
             else:
+                # Check for pending duplicate scans
+                scan_task = scan_repo.get_pending_scan()
+                if scan_task:
+                    logger.info(
+                        "Picked up duplicate scan #%d for source_id=%d",
+                        scan_task["scan_id"], scan_task["source_id"],
+                    )
+                    await scan_engine.run_scan(
+                        scan_task["scan_id"],
+                        scan_task["source_id"],
+                        scan_task["channel_ref"],
+                    )
+                    continue
+
+                # Check for pending bulk-delete jobs
+                del_task = scan_repo.get_pending_delete_job()
+                if del_task:
+                    logger.info(
+                        "Picked up delete job #%d for scan_id=%d",
+                        del_task["id"], del_task["scan_id"],
+                    )
+                    await scan_engine.run_delete(
+                        del_task["id"],
+                        del_task["scan_id"],
+                        del_task["channel_ref"],
+                    )
+                    continue
+
                 state_repo.heartbeat()
                 if _resolve_trigger is not None:
                     _resolve_trigger.clear()
