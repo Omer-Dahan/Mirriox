@@ -20,14 +20,15 @@ def create(
     group_media: bool = True,
     copy_text: bool = True,
     content_types: str = "text,image,video",
+    created_by: Optional[int] = None,
 ) -> Job:
     conn = db.get_connection()
     cur = conn.execute(
         """INSERT INTO jobs
            (name, source_id, destination_id, mode,
             date_from, date_to, id_from, id_to, single_message_id,
-            use_blocked_words, group_media, copy_text, content_types)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            use_blocked_words, group_media, copy_text, content_types, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             name, source_id, destination_id, mode,
             date_from, date_to, id_from, id_to, single_message_id,
@@ -35,6 +36,7 @@ def create(
             1 if group_media else 0,
             1 if copy_text else 0,
             content_types,
+            created_by,
         ),
     )
     conn.commit()
@@ -47,36 +49,57 @@ def get_by_id(job_id: int) -> Optional[Job]:
     return Job.from_row(row) if row else None
 
 
-def get_all(status_filter: Optional[list[str]] = None) -> list[Job]:
+_STATUS_PRIORITY = """CASE status
+    WHEN 'running'       THEN 1
+    WHEN 'pending'       THEN 2
+    WHEN 'waiting_retry' THEN 3
+    WHEN 'paused'        THEN 4
+    WHEN 'draft'         THEN 5
+    WHEN 'failed'        THEN 6
+    WHEN 'cancelled'     THEN 7
+    WHEN 'completed'     THEN 8
+    ELSE 9
+END"""
+
+
+def get_all(
+    status_filter: Optional[list[str]] = None,
+    created_by: Optional[int] = None,
+) -> list[Job]:
     conn = db.get_connection()
+    conditions = []
+    params: list = []
     if status_filter:
         placeholders = ",".join("?" * len(status_filter))
-        query = f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY id DESC"  # nosec B608
-        rows = conn.execute(query, status_filter).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY id DESC"
-        ).fetchall()
+        conditions.append(f"status IN ({placeholders})")  # nosec B608
+        params.extend(status_filter)
+    if created_by is not None:
+        # Show jobs owned by this user OR unassigned (created before per-user tracking)
+        conditions.append("(created_by = ? OR created_by IS NULL)")
+        params.append(created_by)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"SELECT * FROM jobs {where} ORDER BY {_STATUS_PRIORITY} ASC, id DESC"  # nosec B608
+    rows = conn.execute(query, params).fetchall()
     return [Job.from_row(r) for r in rows]
 
 
 def get_pending_job() -> Optional[Job]:
-    """Return the oldest pending job (FIFO)."""
+    """Return the next pending job in submit order (FIFO by submitted_at, fallback to id)."""
     conn = db.get_connection()
     row = conn.execute(
-        "SELECT * FROM jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
+        "SELECT * FROM jobs WHERE status = 'pending' ORDER BY COALESCE(submitted_at, created_at) ASC, id ASC LIMIT 1"
     ).fetchone()
     return Job.from_row(row) if row else None
 
 
 def get_resumable_job() -> Optional[Job]:
-    """Return a waiting_retry job whose retry time has passed."""
+    """Return a waiting_retry job whose retry time has passed (submit order)."""
     conn = db.get_connection()
     row = conn.execute(
         """SELECT * FROM jobs
            WHERE status = 'waiting_retry'
              AND (next_retry_at IS NULL OR next_retry_at <= datetime('now'))
-           ORDER BY id ASC LIMIT 1"""
+           ORDER BY COALESCE(submitted_at, created_at) ASC, id ASC LIMIT 1"""
     ).fetchone()
     return Job.from_row(row) if row else None
 
@@ -97,15 +120,28 @@ def update_status(
     next_retry_at: Optional[str] = None,
 ) -> None:
     conn = db.get_connection()
-    conn.execute(
-        """UPDATE jobs SET
-             status = ?,
-             error_message = COALESCE(?, error_message),
-             next_retry_at = ?,
-             last_updated_at = datetime('now')
-           WHERE id = ?""",
-        (status, error, next_retry_at, job_id),
-    )
+    # Record submit time the first time the job becomes pending
+    if status == "pending":
+        conn.execute(
+            """UPDATE jobs SET
+                 status = ?,
+                 submitted_at = COALESCE(submitted_at, datetime('now')),
+                 error_message = COALESCE(?, error_message),
+                 next_retry_at = ?,
+                 last_updated_at = datetime('now')
+               WHERE id = ?""",
+            (status, error, next_retry_at, job_id),
+        )
+    else:
+        conn.execute(
+            """UPDATE jobs SET
+                 status = ?,
+                 error_message = COALESCE(?, error_message),
+                 next_retry_at = ?,
+                 last_updated_at = datetime('now')
+               WHERE id = ?""",
+            (status, error, next_retry_at, job_id),
+        )
     conn.commit()
 
 
@@ -203,9 +239,18 @@ def delete(job_id: int) -> bool:
 def get_queue_position(job_id: int) -> int:
     """Return 1-based position of this pending job in the queue (1 = next to run)."""
     conn = db.get_connection()
-    row = conn.execute(
-        "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'pending' AND id <= ?",
+    # Get the submitted_at of this job
+    target = conn.execute(
+        "SELECT COALESCE(submitted_at, created_at) as sort_key FROM jobs WHERE id = ?",
         (job_id,),
+    ).fetchone()
+    if not target:
+        return 1
+    row = conn.execute(
+        """SELECT COUNT(*) as cnt FROM jobs
+           WHERE status = 'pending'
+             AND COALESCE(submitted_at, created_at) <= ?""",
+        (target["sort_key"],),
     ).fetchone()
     return row["cnt"] if row else 1
 
@@ -248,7 +293,7 @@ def get_report_messages(job_id: int) -> list[dict]:
                )
              )
            ORDER BY source_message_id
-           LIMIT 1000""",
+           LIMIT 5000""",
         (job_id,),
     ).fetchall()
     return [

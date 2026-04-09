@@ -88,7 +88,8 @@ async def _dispatch_job_action(
 # ── Job list ───────────────────────────────────────────────────────────────────
 
 async def _show_job_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text, kb = renderer.render_job_list()
+    telegram_id = update.effective_user.id if update.effective_user else None
+    text, kb = renderer.render_job_list(telegram_id=telegram_id)
     await update_main_message(context, text, kb)
 
 
@@ -120,9 +121,10 @@ async def _job_confirm_delete(
 async def _job_delete(
     update: Update, context: ContextTypes.DEFAULT_TYPE, job_id: int
 ) -> None:
+    telegram_id = update.effective_user.id if update.effective_user else None
     try:
         job_service.delete_job(job_id)
-        text, kb = renderer.render_job_list()
+        text, kb = renderer.render_job_list(telegram_id=telegram_id)
     except JobError as e:
         text, kb = renderer.render_error(str(e), "jobs")
     await update_main_message(context, text, kb)
@@ -464,6 +466,7 @@ async def _wizard_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update_main_message(context, text, kb)
         return
 
+    telegram_id = update.effective_user.id if update.effective_user else None
     name_base = w.get("name")
     dst_label = (w.get("dest_name") or "יעד").split("(")[0].strip()
 
@@ -495,6 +498,7 @@ async def _wizard_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 group_media=w.get("group_media", True),
                 copy_text=w.get("copy_text", True),
                 content_types=content_types_str,
+                created_by=telegram_id,
             )
             created.append(job)
 
@@ -503,7 +507,7 @@ async def _wizard_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if len(created) == 1:
             text, kb = renderer.render_job_detail(created[0].id)
         else:
-            text, kb = renderer.render_job_list()
+            text, kb = renderer.render_job_list(telegram_id=telegram_id)
     except (JobError, ValidationError) as e:
         text, kb = renderer.render_error(str(e), "jobs")
 

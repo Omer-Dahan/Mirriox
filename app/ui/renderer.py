@@ -22,9 +22,9 @@ def render_main_menu() -> tuple[str, InlineKeyboardMarkup]:
     return text, keyboards.kb_main_menu()
 
 
-def render_job_list(page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+def render_job_list(page: int = 0, telegram_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
     from app.repositories import job_repo
-    jobs = job_repo.get_all()
+    jobs = job_repo.get_all(created_by=telegram_id)
     return texts.jobs_list_text(jobs), keyboards.kb_job_list(jobs, page=page)
 
 

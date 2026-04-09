@@ -60,8 +60,8 @@ def kb_job_list(jobs: list["Job"], page: int = 0) -> InlineKeyboardMarkup:
     page_jobs, total_pages = _paged(jobs, page)
     rows = []
     for job in page_jobs:
-        status_label = texts.STATUS_LABELS.get(job.status, job.status)
-        label = f"{job.name} [{status_label}]"
+        icon = texts.STATUS_ICONS.get(job.status, "•")
+        label = f"{job.name[:43]} {icon}"
         rows.append([_btn(label, f"job:{job.id}:view")])
     if total_pages > 1:
         rows.append(_nav_row("jobs", page, total_pages))
@@ -131,10 +131,16 @@ def kb_wizard_source_list(
     if selected_ids is None:
         selected_ids = []
     rows = []
+    row: list = []
     for src in sources:
         check = "✅" if src.id in selected_ids else "◻"
-        label = f"{check} {src.display()[:45]}"
-        rows.append([_btn(label, f"wzd:toggle_src:{src.id}")])
+        label = f"{check} {src.display()[:30]}"
+        row.append(_btn(label, f"wzd:toggle_src:{src.id}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
     if selected_ids:
         rows.append([_btn("✔ סיים בחירה", "wzd:done_sources")])
     rows.append([_btn(texts.BTN_ADD + " מקור", "wzd:add_source")])
@@ -144,9 +150,15 @@ def kb_wizard_source_list(
 
 def kb_wizard_dest_list(dests: list["Destination"]) -> InlineKeyboardMarkup:
     rows = []
+    row: list = []
     for dest in dests:
-        label = dest.display()[:50]
-        rows.append([_btn(label, f"wzd:dst:{dest.id}")])
+        label = dest.display()[:30]
+        row.append(_btn(label, f"wzd:dst:{dest.id}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
     rows.append([_btn(texts.BTN_ADD + " יעד", "wzd:add_dest")])
     rows.append([_btn(texts.BTN_CANCEL, "job:cancel_wizard")])
     return InlineKeyboardMarkup(rows)

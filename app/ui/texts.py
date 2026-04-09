@@ -19,6 +19,17 @@ STATUS_LABELS: dict[str, str] = {
     "waiting_retry": "🔄 ממתין לניסיון חוזר",
 }
 
+STATUS_ICONS: dict[str, str] = {
+    "draft":         "📝",
+    "pending":       "⏳",
+    "running":       "▶️",
+    "paused":        "⏸",
+    "completed":     "✅",
+    "cancelled":     "🚫",
+    "failed":        "❌",
+    "waiting_retry": "🔄",
+}
+
 MODE_LABELS: dict[str, str] = {
     "all":        "📋 כל ההודעות",
     "date_range": "📅 טווח תאריכים",

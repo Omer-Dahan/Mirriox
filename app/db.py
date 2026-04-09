@@ -167,6 +167,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "jobs",          "report_url",         "TEXT")
     _add_column_if_missing(conn, "jobs",          "group_media",        "INTEGER DEFAULT 1")
     _add_column_if_missing(conn, "jobs",          "copy_text",          "INTEGER DEFAULT 1")
+    _add_column_if_missing(conn, "jobs",          "submitted_at",       "TEXT")
+    _add_column_if_missing(conn, "jobs",          "created_by",         "INTEGER")
     # Channel extra-info columns
     for table in ("sources", "destinations"):
         _add_column_if_missing(conn, table, "username",           "TEXT")

@@ -18,6 +18,14 @@ def validate_channel_ref(ref: str) -> str:
     if not ref:
         raise ValidationError("הפניה לערוץ לא יכולה להיות ריקה")
 
+    # Private invite link: t.me/+hash or t.me/joinchat/hash — keep as-is
+    if "t.me/+" in ref or "t.me/joinchat/" in ref:
+        # Normalise to t.me/+hash format for storage
+        if "t.me/joinchat/" in ref:
+            hash_part = ref.split("t.me/joinchat/")[-1].strip()
+            return f"t.me/+{hash_part}"
+        return ref.strip()
+
     # If it's a URL like t.me/something, extract the username
     if "t.me/" in ref:
         parts = ref.split("t.me/")

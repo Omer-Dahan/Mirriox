@@ -190,15 +190,18 @@ async def _poll_loop(config: Config, engine: CopyEngine, client: TelegramClient)
                     )
 
                     if new_count >= max_retries:
+                        # Pause instead of fail so the user can manually resume
                         job_repo.update_status(
                             job.id,
-                            "failed",
-                            error=f"FloodWait: הגיע למקסימום ניסיונות ({max_retries})",
+                            "paused",
+                            error=f"FloodWait: הגיע למקסימום ניסיונות ({max_retries}) — המשימה הושהתה, ניתן להמשיך ידנית",
                         )
-                        logger.error("Job #%d: max retries reached, marking failed", job.id)
+                        logger.warning(
+                            "Job #%d: max FloodWait retries reached — paused for manual resume", job.id
+                        )
                         await _send_network_disruption_notification(
                             client, job.id,
-                            f"FloodWait — הגיע למקסימום ניסיונות ({max_retries})",
+                            f"FloodWait — הגיע למקסימום ניסיונות ({max_retries}). המשימה הושהתה — לחץ 'המשך' כדי להמשיך.",
                             resumed=False,
                         )
                     else:

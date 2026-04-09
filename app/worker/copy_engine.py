@@ -103,6 +103,7 @@ class CopyEngine:
         failed = job.failed_count
         _last_progress_log = copied
         _msgs_since_pause_check = 0  # check for pause every 25 messages
+        _msgs_since_limit_check = 0  # check daily limit every 100 messages
 
         # Buffer for collecting media-group messages before forwarding them together
         pending_group: list[Message] = []
@@ -344,6 +345,21 @@ class CopyEngine:
                                 logger.info("Job #%d: pause requested — stopping at msg #%d", job.id, msg.id)
                                 job_repo.update_progress(job.id, copied, skipped, failed, msg.id)
                                 return
+
+                        _msgs_since_limit_check += 1
+                        if _msgs_since_limit_check >= 100:
+                            _msgs_since_limit_check = 0
+                            stats = job_repo.get_transfer_stats()
+                            from app.ui.texts import DAILY_LIMIT
+                            if stats["since_midnight"] >= DAILY_LIMIT:
+                                logger.warning(
+                                    "Job #%d: daily limit reached mid-job (%d msgs) — pausing at msg #%d",
+                                    job.id, stats["since_midnight"], msg.id,
+                                )
+                                job_repo.update_progress(job.id, copied, skipped, failed, msg.id)
+                                job_repo.pause_job(job.id)
+                                return
+
                         await self._rate_limiter.wait()
 
             # Flush any remaining buffers at end of stream
@@ -605,7 +621,8 @@ class CopyEngine:
         ))
 
     async def _send_as_copy(self, msg: Message, dst_entity, copy_text: bool = True) -> None:
-        """Download and re-upload a single message (used when forwarding is blocked)."""
+        """Download and re-upload a single message (used when forwarding is blocked).
+        Raises RuntimeError if media download returns None (caller records as failed)."""
         text = msg.text if copy_text else ""
 
         if not msg.media or isinstance(msg.media, MessageMediaUnsupported):
@@ -615,9 +632,8 @@ class CopyEngine:
 
         file_bytes: Optional[bytes] = await self._client.download_media(msg, file=bytes)
         if file_bytes is None:
-            if text:
-                await self._client.send_message(dst_entity, text)
-            return
+            # Media could not be downloaded (e.g. forwarded from protected channel)
+            raise RuntimeError("download_failed: media returned None (protected or unavailable)")
 
         await self._client.send_file(dst_entity, file_bytes, caption=text or None)
 
@@ -687,12 +703,23 @@ class CopyEngine:
         # Fallback: download and re-upload
         files: list[bytes] = []
         captions: list[str] = []
+        failed_downloads: list[Message] = []
         for m in group:
             if m.media and not isinstance(m.media, MessageMediaUnsupported):
                 data: Optional[bytes] = await self._client.download_media(m, file=bytes)
                 if data:
                     files.append(data)
                     captions.append(m.text if copy_text else "")
+                else:
+                    failed_downloads.append(m)
+            # text-only messages in a group are included via caption, no separate download needed
+
+        if failed_downloads:
+            # Raise so callers can record these as failed instead of silently dropping
+            ids = [m.id for m in failed_downloads]
+            raise RuntimeError(
+                f"download_failed: {len(failed_downloads)} media item(s) returned None (ids={ids})"
+            )
 
         if not files:
             text = next((m.text for m in group if m.text), None) if copy_text else None

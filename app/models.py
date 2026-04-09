@@ -169,6 +169,8 @@ class Job:
     max_retries: int
     next_retry_at: Optional[str]
     error_message: Optional[str]
+    submitted_at: Optional[str] = None
+    created_by: Optional[int] = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Job":
@@ -202,6 +204,8 @@ class Job:
             max_retries=row["max_retries"] or 3,
             next_retry_at=row["next_retry_at"],
             error_message=row["error_message"],
+            submitted_at=row["submitted_at"] if "submitted_at" in row.keys() else None,
+            created_by=row["created_by"] if "created_by" in row.keys() else None,
         )
 
     def is_active(self) -> bool:

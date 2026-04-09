@@ -24,6 +24,7 @@ def create_draft_job(
     group_media: bool = True,
     copy_text: bool = True,
     content_types: str = "text,image,video",
+    created_by: Optional[int] = None,
 ) -> Job:
     """Create a job in draft state. Raises JobError on invalid input."""
     src = source_repo.get_source_by_id(source_id)
@@ -53,6 +54,7 @@ def create_draft_job(
         group_media=group_media,
         copy_text=copy_text,
         content_types=content_types,
+        created_by=created_by,
     )
 
 
