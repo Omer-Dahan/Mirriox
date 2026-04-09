@@ -229,7 +229,7 @@ class CopyEngine:
             if job_repo.is_paused(job.id):
                 logger.info("Job #%d: pause requested after media flush at #%d", job.id, last_id)
                 return True
-            await self._rate_limiter.wait()
+            await self._rate_limiter.wait(album=True)
             return False
 
         async def flush_group() -> bool:
@@ -270,7 +270,7 @@ class CopyEngine:
             if job_repo.is_paused(job.id):
                 logger.info("Job #%d: pause requested after album flush at #%d", job.id, last_id)
                 return True
-            await self._rate_limiter.wait()
+            await self._rate_limiter.wait(album=True)
             return False
 
         try:

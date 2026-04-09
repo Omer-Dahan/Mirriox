@@ -63,13 +63,17 @@ class RateLimiter:
         except (ValueError, TypeError):
             pass
 
-    async def wait(self) -> None:
-        """Random per-message delay, followed by a batch pause when the threshold is hit."""
+    async def wait(self, album: bool = False) -> None:
+        """Random per-message delay, followed by a batch pause when the threshold is hit.
+        Pass album=True after sending a media group — doubles the delay to reduce FloodWait risk."""
         now = time.monotonic()
         self._sent_timestamps.append(now)
         self._msg_count += 1
 
         delay_s = random.uniform(self.min_ms / 1000.0, self.max_ms / 1000.0)  # nosec B311
+        if album:
+            delay_s *= 2
+            logger.debug("Album delay: %.1fs (2x normal)", delay_s)
         await asyncio.sleep(delay_s)
 
         if self._msg_count >= self._next_batch_pause_at:
