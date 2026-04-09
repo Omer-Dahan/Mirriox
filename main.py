@@ -13,8 +13,58 @@ import argparse
 import asyncio
 import logging
 import os
+import signal
+import sys
 
 from app.network_errors import is_network_error
+
+_PID_FILE = "mirriox.pid"
+
+
+def _kill_old_process() -> None:
+    """Terminate any previously running Mirriox process recorded in the PID file."""
+    logger = logging.getLogger(__name__)
+    if not os.path.exists(_PID_FILE):
+        return
+    try:
+        with open(_PID_FILE) as f:
+            old_pid = int(f.read().strip())
+    except (ValueError, OSError):
+        return
+
+    if old_pid == os.getpid():
+        return  # shouldn't happen, but guard against self-kill
+
+    try:
+        os.kill(old_pid, 0)  # check if process is alive
+    except OSError:
+        return  # already gone
+
+    try:
+        if sys.platform == "win32":
+            import subprocess
+            subprocess.call(
+                ["taskkill", "/F", "/PID", str(old_pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            os.kill(old_pid, signal.SIGTERM)
+        logger.info("Terminated old process (PID %d)", old_pid)
+    except OSError as e:
+        logger.warning("Could not terminate old process %d: %s", old_pid, e)
+
+
+def _write_pid() -> None:
+    with open(_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _remove_pid() -> None:
+    try:
+        os.remove(_PID_FILE)
+    except OSError:
+        pass
 
 
 class _CollapseNetworkErrors(logging.Filter):
@@ -74,6 +124,15 @@ def main() -> None:
     _setup_logging()
     logger = logging.getLogger(__name__)
 
+    _kill_old_process()
+    _write_pid()
+    try:
+        _run_main(logger)
+    finally:
+        _remove_pid()
+
+
+def _run_main(logger: logging.Logger) -> None:
     parser = argparse.ArgumentParser(description="Mirriox Telegram Copier")
     parser.add_argument(
         "mode",

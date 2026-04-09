@@ -191,33 +191,38 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
 
 def _migrate_copied_messages_no_cascade(conn: sqlite3.Connection) -> None:
     """Remove ON DELETE CASCADE from copied_messages so deleting a job keeps its stats."""
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='copied_messages'"
-    ).fetchone()
-    if not row or "ON DELETE CASCADE" not in (row[0] or ""):
-        return  # Already migrated or table doesn't exist yet
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='copied_messages'"
+        ).fetchone()
+        if not row or "ON DELETE CASCADE" not in (row[0] or ""):
+            return  # Already migrated or table doesn't exist yet
 
-    conn.execute("PRAGMA foreign_keys=OFF")
-    conn.execute("""
-        CREATE TABLE copied_messages_v2 (
-            id                INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id            INTEGER NOT NULL REFERENCES jobs(id),
-            source_message_id INTEGER NOT NULL,
-            dest_message_id   INTEGER,
-            status            TEXT NOT NULL CHECK(status IN ('copied','skipped','failed')),
-            skip_reason       TEXT,
-            processed_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(job_id, source_message_id)
-        )
-    """)
-    conn.execute("INSERT INTO copied_messages_v2 SELECT * FROM copied_messages")
-    conn.execute("DROP TABLE copied_messages")
-    conn.execute("ALTER TABLE copied_messages_v2 RENAME TO copied_messages")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_copied_msg_job ON copied_messages(job_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_copied_src_id ON copied_messages(job_id, source_message_id)")
-    conn.commit()
-    conn.execute("PRAGMA foreign_keys=ON")
-    logger.info("Migration: removed ON DELETE CASCADE from copied_messages")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE IF EXISTS copied_messages_v2")
+        conn.execute("""
+            CREATE TABLE copied_messages_v2 (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id            INTEGER NOT NULL REFERENCES jobs(id),
+                source_message_id INTEGER NOT NULL,
+                dest_message_id   INTEGER,
+                status            TEXT NOT NULL CHECK(status IN ('copied','skipped','failed')),
+                skip_reason       TEXT,
+                processed_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(job_id, source_message_id)
+            )
+        """)
+        conn.execute("INSERT INTO copied_messages_v2 SELECT * FROM copied_messages")
+        conn.execute("DROP TABLE copied_messages")
+        conn.execute("ALTER TABLE copied_messages_v2 RENAME TO copied_messages")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_copied_msg_job ON copied_messages(job_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_copied_src_id ON copied_messages(job_id, source_message_id)")
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        logger.info("Migration: removed ON DELETE CASCADE from copied_messages")
+    except Exception:
+        logger.exception("Migration _migrate_copied_messages_no_cascade failed — skipping")
+        conn.execute("PRAGMA foreign_keys=ON")
 
 
 def _add_column_if_missing(

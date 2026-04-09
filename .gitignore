@@ -24,6 +24,9 @@ Thumbs.db
 *.md
 !README.md
 
+# PID file
+mirriox.pid
+
 # Application Data & Database
 *.db
 *.sqlite
