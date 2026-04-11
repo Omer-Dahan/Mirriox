@@ -17,8 +17,11 @@ if TYPE_CHECKING:
 def render_main_menu() -> tuple[str, InlineKeyboardMarkup]:
     worker = state_repo.get_worker_state()
     from app.repositories import job_repo
+    from app.repositories import scan_repo
     active = job_repo.get_active_job()
-    text = texts.main_menu_text(worker.status, active)
+    active_scan = scan_repo.get_active_scan()
+    active_delete_job = scan_repo.get_active_delete_job()
+    text = texts.main_menu_text(worker.status, active, active_scan, active_delete_job)
     return text, keyboards.kb_main_menu()
 
 

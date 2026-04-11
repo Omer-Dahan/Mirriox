@@ -3,6 +3,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
+
+# ── DNS bypass ─────────────────────────────────────────────────────────────────
+# The system DNS is broken (IPv6 router DNS, no response).
+# Telethon uses hardcoded DC IPs and works fine; we do the same for the Bot API.
+# We patch socket.getaddrinfo to return Telegram's known IPs directly,
+# so no DNS resolution is attempted for api.telegram.org at all.
+# IPs sourced from Telegram's official DC list — stable for years.
+_TELEGRAM_API_IPS = ["149.154.167.220", "149.154.167.221", "91.108.4.1"]
+_orig_getaddrinfo = socket.getaddrinfo
+
+def _bypass_dns(host, port, *args, **kwargs):
+    if host == "api.telegram.org":
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))
+            for ip in _TELEGRAM_API_IPS
+        ]
+    return _orig_getaddrinfo(host, port, *args, **kwargs)
+
+socket.getaddrinfo = _bypass_dns
+# ──────────────────────────────────────────────────────────────────────────────
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -238,9 +260,12 @@ async def _auto_refresh_main_menu(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def build_application(config: Config) -> Application:
-    # Force HTTP/1.1 to avoid httpx HTTP/2 connection-pool stalls on Windows
-    # after transient network drops (the pool gets stuck and won't recover quickly
-    # with HTTP/2 multiplexing on unstable connections).
+    # Use Google DNS (8.8.8.8) to bypass broken system/ISP DNS.
+    # The worker (Telethon) uses hardcoded DC IPs, so it works without DNS.
+    # But api.telegram.org (HTTP Bot API) needs DNS resolution.
+    import httpx
+    from telegram.request import HTTPXRequest
+
     request = HTTPXRequest(
         connection_pool_size=8,
         connect_timeout=30,
@@ -285,6 +310,12 @@ def build_application(config: Config) -> Application:
         )
     )
 
+    # Global error handler — logs ALL handler exceptions so nothing is hidden
+    async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.error("Handler error [update=%s]: %s", update, context.error, exc_info=context.error)
+
+    app.add_error_handler(_global_error_handler)
+
     return app
 
 
@@ -292,8 +323,11 @@ def _make_auth_command(handler_fn, config: Config):
     async def _wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user is None:
             return
-        if not _is_authorized(update.effective_user.id, config.ADMIN_IDS):
-            return  # silent — act as if offline
+        uid = update.effective_user.id
+        if not _is_authorized(uid, config.ADMIN_IDS):
+            logger.warning("/start rejected: user %d not in ADMIN_IDS %s", uid, config.ADMIN_IDS)
+            return
+        logger.info("/start accepted for user %d", uid)
         await handler_fn(update, context)
     return _wrapped
 
@@ -317,18 +351,31 @@ async def run_async(config: Config) -> None:
     # We manage the lifecycle manually (instead of `async with app:`) so that
     # initialize() can be retried without recreating the whole Application.
     _INIT_RETRY_S = 5
+    _attempt = 0
     while True:
         try:
+            _attempt += 1
             await app.initialize()
+            if _attempt > 1:
+                logger.info("Bot init succeeded after %d attempt(s) 🔄✅", _attempt)
             break
         except Exception as exc:
-            logger.warning("Bot init failed (%s) — retrying in %ds...", exc, _INIT_RETRY_S)
+            exc_type = type(exc).__name__
+            hint = ""
+            msg = str(exc)
+            if "ConnectError" in exc_type or "Connect" in exc_type:
+                hint = " (בדוק רשת / טוקן בוט)"
+            elif "401" in msg or "Unauthorized" in msg:
+                hint = " (טוקן בוט לא תקין — בדוק BOT_TOKEN ב-.env)"
+            elif "ConnectionError" in exc_type or "Timeout" in exc_type:
+                hint = " (timeout — בדוק אם שרתי טלגרם נגישים)"
+            logger.warning("Bot init failed [%s]%s — retrying in %ds...", exc, hint, _INIT_RETRY_S)
             await asyncio.sleep(_INIT_RETRY_S)
 
     try:
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)  # type: ignore[union-attr]
-        logger.info("Management bot started")
+        logger.info("✅ Management bot connected and polling")
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:

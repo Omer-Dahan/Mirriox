@@ -110,7 +110,12 @@ BTN_CONFIRM_RESET          = "✅ כן, אפס"
 
 # ── Main menu ──────────────────────────────────────────────────────────────────
 
-def main_menu_text(worker_status: str, active_job: "Job | None") -> str:
+def main_menu_text(
+    worker_status: str,
+    active_job: "Job | None",
+    active_scan: dict | None = None,
+    active_delete_job: dict | None = None,
+) -> str:
     ws_label = WORKER_STATUS_LABELS.get(worker_status, worker_status)
     if active_job:
         job_line = (
@@ -121,10 +126,28 @@ def main_menu_text(worker_status: str, active_job: "Job | None") -> str:
     else:
         job_line = "אין משימה פעילה כרגע"
 
+    scan_line = ""
+    if active_scan:
+        st = "▶️ סורק" if active_scan.get("status") == "running" else "⏳ ממתין לסריקה"
+        c = active_scan.get("messages_scanned", 0)
+        t = active_scan.get("total_messages", 0)
+        pct = f"({int(c/t*100)}%) " if t else ""
+        title = active_scan.get("channel_title") or active_scan.get("channel_ref") or "?"
+        scan_line = f"\n\n🔍 כפילויות: {st} <b>{pct}{c:,}</b> הודעות ({esc(title)})"
+
+    delete_line = ""
+    if active_delete_job:
+        st = "▶️ מוחק" if active_delete_job.get("status") == "running" else "⏳ ממתין למחיקה"
+        d = active_delete_job.get("deleted_count", 0)
+        title = active_delete_job.get("channel_title") or active_delete_job.get("channel_ref") or "?"
+        delete_line = f"\n\n🗑 מחיקה: {st} <b>{d:,}</b> נמחקו ({esc(title)})"
+
     return (
         f"{TITLE_MAIN_MENU}\n\n"
         f"🖥 עובד: {ws_label}\n"
         f"{job_line}"
+        f"{scan_line}"
+        f"{delete_line}"
     )
 
 

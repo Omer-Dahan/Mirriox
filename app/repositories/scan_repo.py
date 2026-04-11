@@ -163,6 +163,19 @@ def get_pending_scan() -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def get_active_scan() -> dict[str, Any] | None:
+    """Return the currently running or next pending scan, to show on the main menu."""
+    conn = get_connection()
+    row = conn.execute(
+        """SELECT *
+           FROM duplicate_scans
+           WHERE status IN ('pending', 'running')
+           ORDER BY status DESC, created_at ASC
+           LIMIT 1"""
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def get_scan_by_id(scan_id: int) -> dict[str, Any] | None:
     conn = get_connection()
     row = conn.execute(
@@ -217,6 +230,21 @@ def get_pending_delete_job() -> dict[str, Any] | None:
            JOIN duplicate_scans ds ON ds.id = dsj.scan_id
            WHERE dsj.status='pending'
            ORDER BY dsj.created_at ASC
+           LIMIT 1"""
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_active_delete_job() -> dict[str, Any] | None:
+    """Return the currently running or next pending delete job, to show on the main menu."""
+    conn = get_connection()
+    row = conn.execute(
+        """SELECT dsj.*,
+                  ds.channel_ref, ds.channel_title
+           FROM delete_scan_jobs dsj
+           JOIN duplicate_scans ds ON ds.id = dsj.scan_id
+           WHERE dsj.status IN ('pending', 'running')
+           ORDER BY dsj.status DESC, dsj.created_at ASC
            LIMIT 1"""
     ).fetchone()
     return dict(row) if row else None

@@ -188,6 +188,7 @@ async def _run_with_restart(name: str, coro_fn, config) -> None:
                     name, exc, _RETRY_DELAY_S,
                 )
                 await asyncio.sleep(_RETRY_DELAY_S)
+                _logger.info("[%s] 🔄 מנסה להתחבר מחדש...", name)
             else:
                 _logger.exception("[%s] שגיאה קריטית — מפסיק: %s", name, exc)
                 raise

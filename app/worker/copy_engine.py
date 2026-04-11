@@ -137,7 +137,7 @@ class CopyEngine:
                     continue
                 if allowed_types != {"image", "text", "video"}:
                     msg_type = self._get_content_type(m)
-                    if msg_type != "other" and msg_type not in allowed_types:
+                    if msg_type not in allowed_types:
                         job_repo.record_copied_message(job.id, m.id, None, "skipped", f"content_type:{msg_type}")
                         already_done.add(m.id)
                         skipped += 1
@@ -377,8 +377,9 @@ class CopyEngine:
             if await flush_group():
                 return
             if group_media:
-                if await flush_solo_media():
-                    return
+                while solo_media_buffer:
+                    if await flush_solo_media():
+                        return
 
         except FloodWaitError:
             logger.warning("Job #%d: FloodWait encountered", job.id)
@@ -470,31 +471,56 @@ class CopyEngine:
         Returns (statuses, src_is_protected) — one status per message.
         src_is_protected is updated to True if the channel turns out to be protected.
         """
-        # Check filter: if ANY message triggers a blocked word, skip the whole group
+        # Global block word checks
         if blocked_words and any(self._is_blocked(m, blocked_words) for m in group):
             logger.debug("Job #%d: group %d blocked by filter", job.id, group[0].grouped_id)
             return [("skipped", "blocked_word")] * len(group), src_is_protected
 
-        # Content type filter for album (albums are photos → image type)
         allowed_types: set[str] = set((job.content_types or "text,image,video").split(","))
-        if allowed_types != {"image", "text", "video"}:
-            group_type = self._get_content_type(group[0])
-            if group_type != "other" and group_type not in allowed_types:
-                logger.debug("Job #%d: album group=%s skipped (type=%s)", job.id, group[0].grouped_id, group_type)
-                return [("skipped", f"content_type:{group_type}")] * len(group), src_is_protected
+
+        final_statuses: list[tuple[str, Optional[str]]] = []
+        send_group: list[Message] = []
+
+        # Filter items individually
+        for m in group:
+            if not job.copy_text and (not m.media or isinstance(m.media, MessageMediaUnsupported)):
+                final_statuses.append(("skipped", "text_stripped_empty"))
+                continue
+            
+            if allowed_types != {"image", "text", "video"}:
+                msg_type = self._get_content_type(m)
+                if msg_type not in allowed_types:
+                    final_statuses.append(("skipped", f"content_type:{msg_type}"))
+                    continue
+            
+            final_statuses.append(None) # placeholder
+            send_group.append(m)
+
+        if not send_group:
+            logger.debug("Job #%d: album group=%s all items skipped", job.id, group[0].grouped_id)
+            return [st for st in final_statuses if st is not None], src_is_protected
+
+        def fill_statuses(st_tuple):
+            return [st_tuple if st is None else st for st in final_statuses]
+
+        if len(send_group) == 1:
+            st, reason, src_is_protected = await self._process_message(
+                job, send_group[0], [], src_entity, dst_entity, src_is_protected
+            )
+            return fill_statuses((st, reason)), src_is_protected
 
         if src_is_protected:
             # Channel already known to be protected — skip straight to download+upload
             try:
-                await self._send_group_as_copy(group, dst_entity, copy_text=job.copy_text)
-                return [("copied", None)] * len(group), src_is_protected
+                await self._send_group_as_copy(send_group, dst_entity, copy_text=job.copy_text)
+                return fill_statuses(("copied", None)), src_is_protected
             except FloodWaitError:
                 raise
             except Exception as e:
                 logger.warning("Job #%d: download+upload album failed: %s", job.id, e)
-                return [("failed", str(e)[:200])] * len(group), src_is_protected
+                return fill_statuses(("failed", str(e)[:200])), src_is_protected
 
-        ids = [m.id for m in group]
+        ids = [m.id for m in send_group]
         try:
             if job.copy_text:
                 await self._client(ForwardMessagesRequest(
@@ -505,12 +531,12 @@ class CopyEngine:
                     random_id=[random.randint(0, 2**63) for _ in ids],  # nosec B311
                 ))
             else:
-                await self._send_group_by_ref(group, dst_entity, copy_text=False)
+                await self._send_group_by_ref(send_group, dst_entity, copy_text=False)
             logger.info(
                 "Job #%d: forwarded album of %d items (ids=%s)",
                 job.id, len(ids), ids,
             )
-            return [("copied", None)] * len(group), src_is_protected
+            return fill_statuses(("copied", None)), src_is_protected
 
         except ChatForwardsRestrictedError:
             src_is_protected = True
@@ -519,13 +545,13 @@ class CopyEngine:
                 job.id,
             )
             try:
-                await self._send_group_as_copy(group, dst_entity)
-                return [("copied", None)] * len(group), src_is_protected
+                await self._send_group_as_copy(send_group, dst_entity)
+                return fill_statuses(("copied", None)), src_is_protected
             except FloodWaitError:
                 raise
             except Exception as e:
                 logger.warning("Job #%d: download+upload album failed: %s", job.id, e)
-                return [("failed", str(e)[:200])] * len(group), src_is_protected
+                return fill_statuses(("failed", str(e)[:200])), src_is_protected
 
         except FloodWaitError:
             raise
@@ -533,9 +559,9 @@ class CopyEngine:
         except Exception as e:
             logger.warning(
                 "Job #%d: failed to forward album (ids=%s): %s",
-                job.id, [m.id for m in group], e,
+                job.id, ids, e,
             )
-            return [("failed", str(e)[:200])] * len(group), src_is_protected
+            return fill_statuses(("failed", str(e)[:200])), src_is_protected
 
     async def _process_message(
         self,
@@ -557,7 +583,7 @@ class CopyEngine:
         allowed_types: set[str] = set((job.content_types or "text,image,video").split(","))
         if allowed_types != {"image", "text", "video"}:
             msg_type = self._get_content_type(msg)
-            if msg_type != "other" and msg_type not in allowed_types:
+            if msg_type not in allowed_types:
                 logger.debug("Job #%d: msg #%d skipped (type=%s not in %s)", job.id, msg.id, msg_type, allowed_types)
                 return "skipped", f"content_type:{msg_type}", src_is_protected
 
