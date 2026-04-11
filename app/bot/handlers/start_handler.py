@@ -2,53 +2,49 @@
 from __future__ import annotations
 
 import logging
-from telegram import Update
-from telegram.error import TelegramError
-from telegram.ext import ContextTypes
+from telethon import TelegramClient
 
 from app.repositories import state_repo
+from app.bot import state as _state
+from app.bot.handlers._common import update_main_message
 from app.ui import renderer
+from app.ui.keyboards import to_telethon
 
 logger = logging.getLogger(__name__)
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start_command(bot: TelegramClient, event) -> None:
     """Send a new main control message; delete the old one if possible."""
-    if update.message is None:
-        return
+    uid = event.sender_id
+    chat_id = event.chat_id
 
-    chat_id = update.effective_chat.id  # type: ignore[union-attr]
+    # Clear any in-flight wizard state
+    _state.clear_user_data(uid)
 
     old_msg_id_str = state_repo.get_setting("main_message_id")
     old_chat_id_str = state_repo.get_setting("main_chat_id")
 
-    # Clear any in-flight wizard state
-    if context.user_data:
-        context.user_data.clear()
-
-    # Send the new main message first — only then delete the old one
+    # Send the new main message first
     text, keyboard = renderer.render_main_menu()
-    msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        reply_markup=keyboard,
-        parse_mode="HTML",
+    msg = await bot.send_message(
+        chat_id,
+        text,
+        buttons=to_telethon(keyboard),
+        parse_mode="html",
+        link_preview=False,
     )
 
     # Store the new message coordinates
     state_repo.set_setting("main_chat_id", str(chat_id))
-    state_repo.set_setting("main_message_id", str(msg.message_id))
+    state_repo.set_setting("main_message_id", str(msg.id))
 
     # Delete the old message only after the new one is successfully stored
     if old_msg_id_str and old_chat_id_str:
         try:
-            await context.bot.delete_message(
-                chat_id=int(old_chat_id_str),
-                message_id=int(old_msg_id_str),
-            )
-        except TelegramError:
-            pass  # Already gone or not accessible — that's fine
+            await bot.delete_messages(int(old_chat_id_str), int(old_msg_id_str))
+        except Exception:
+            pass  # Already gone or not accessible
 
     # Mark that main menu is currently visible
-    context.bot_data["on_main_screen"] = True
-    logger.info("Main control message created: chat=%d msg=%d", chat_id, msg.message_id)
+    _state._bot_data["on_main_screen"] = True
+    logger.info("Main control message created: chat=%d msg=%d", chat_id, msg.id)

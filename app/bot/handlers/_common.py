@@ -1,11 +1,10 @@
-"""Shared helpers for all bot handlers."""
+"""Shared helpers for all bot handlers — Telethon edition."""
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from telegram import InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes
-from telegram.error import TelegramError, BadRequest
+from telethon import TelegramClient
+from telethon.errors import MessageNotModifiedError, MessageIdInvalidError, RPCError
 
 from app.repositories import state_repo
 
@@ -16,9 +15,9 @@ _disconnected_since: datetime | None = None
 
 
 async def update_main_message(
-    context: ContextTypes.DEFAULT_TYPE,
+    bot: TelegramClient,
     text: str,
-    keyboard: InlineKeyboardMarkup,
+    buttons: list | None,
 ) -> None:
     """Edit the stored main control message with new text + keyboard."""
     global _disconnected_since
@@ -31,45 +30,48 @@ async def update_main_message(
         return
 
     try:
-        await context.bot.edit_message_text(
-            chat_id=int(chat_id_str),
-            message_id=int(msg_id_str),
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
+        await bot.edit_message(
+            int(chat_id_str),
+            int(msg_id_str),
+            text,
+            buttons=buttons,
+            parse_mode="html",
+            link_preview=False,
         )
-        # Log recovery if we were previously disconnected
         if _disconnected_since is not None:
             downtime_s = (datetime.utcnow() - _disconnected_since).total_seconds()
             logger.info("Bot reconnected successfully after %.0fs", downtime_s)
             _disconnected_since = None
-    except BadRequest as e:
-        if "message is not modified" in str(e).lower():
-            pass  # Already showing this content, not an error
-        else:
-            logger.warning("Failed to edit main message: %s", e)
-    except TelegramError as e:
+
+    except MessageNotModifiedError:
+        pass  # Already showing this content — not an error
+
+    except (MessageIdInvalidError, ValueError) as e:
+        logger.warning("Failed to edit main message: %s", e)
+
+    except RPCError as e:
         if _disconnected_since is None:
             _disconnected_since = datetime.utcnow()
-            logger.warning("Bot lost connectivity at %s: %s", _disconnected_since.strftime("%H:%M:%S"), e)
+            logger.warning(
+                "Bot lost connectivity at %s: %s",
+                _disconnected_since.strftime("%H:%M:%S"), e,
+            )
         else:
             downtime_s = (datetime.utcnow() - _disconnected_since).total_seconds()
             logger.warning("Bot still disconnected (%.0fs so far): %s", downtime_s, e)
 
 
-async def answer_callback(update: Update, text: str = "") -> None:
-    """Silently acknowledge a callback query."""
-    if update.callback_query:
-        try:
-            await update.callback_query.answer(text)
-        except TelegramError:
-            pass
+async def answer_callback(event, text: str = "") -> None:
+    """Silently acknowledge a callback query event."""
+    try:
+        await event.answer(text)
+    except Exception:
+        pass
 
 
-async def delete_user_message(update: Update) -> None:
+async def delete_user_message(event) -> None:
     """Delete the incoming user message (used after text-input steps)."""
-    if update.message:
-        try:
-            await update.message.delete()
-        except TelegramError:
-            pass
+    try:
+        await event.delete()
+    except Exception:
+        pass

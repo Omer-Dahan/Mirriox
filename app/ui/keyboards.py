@@ -1,13 +1,32 @@
-"""InlineKeyboardMarkup builders. All callback_data follows domain:id:action format."""
+"""InlineKeyboardMarkup builders. All callback_data follows domain:id:action format.
+
+All existing functions return InlineKeyboardMarkup (kept for renderer.py compatibility).
+Use to_telethon(markup) to convert for Telethon bot sending.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telethon import Button
 
 from app.ui import texts
 
 if TYPE_CHECKING:
     from app.models import Job, Source, Destination, BlockedWord, Admin
+
+
+def to_telethon(markup: InlineKeyboardMarkup) -> list[list[Button]]:
+    """Convert a PTB InlineKeyboardMarkup to a Telethon Button grid."""
+    rows = []
+    for row in markup.inline_keyboard:
+        tg_row = []
+        for btn in row:
+            if btn.url:
+                tg_row.append(Button.url(btn.text, btn.url))
+            else:
+                tg_row.append(Button.inline(btn.text, data=btn.callback_data or ""))
+        rows.append(tg_row)
+    return rows
 
 
 _PAGE_SIZE = 8  # items per page; nav row added when list exceeds this
