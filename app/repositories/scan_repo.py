@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 # Duplicate scans
 # ---------------------------------------------------------------------------
 
-def create_scan(source_id: int) -> int:
+def create_scan(channel_ref: str, channel_title: str, dest_id: int | None = None) -> int:
     conn = get_connection()
     cur = conn.execute(
-        "INSERT INTO duplicate_scans(source_id) VALUES (?)", (source_id,)
+        "INSERT INTO duplicate_scans(channel_ref, channel_title, dest_id) VALUES (?,?,?)",
+        (channel_ref, channel_title, dest_id),
     )
     conn.commit()
     return cur.lastrowid
@@ -60,6 +61,36 @@ def fail_scan(scan_id: int, error_msg: str) -> None:
     conn.commit()
 
 
+def cancel_scan(scan_id: int) -> None:
+    """Mark a pending/running scan as failed (user-initiated stop)."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE duplicate_scans SET status='failed', error_msg='בוטל על ידי המשתמש' WHERE id=? AND status IN ('pending','running')",
+        (scan_id,),
+    )
+    conn.commit()
+
+
+def delete_scans_for_channel(channel_ref: str) -> int:
+    """Delete ALL scan records (and their items/delete-jobs via CASCADE) for a channel. Returns count deleted."""
+    conn = get_connection()
+    # delete_scan_jobs references duplicate_scans — delete them first
+    conn.execute(
+        "DELETE FROM delete_scan_jobs WHERE scan_id IN (SELECT id FROM duplicate_scans WHERE channel_ref=?)",
+        (channel_ref,),
+    )
+    conn.execute(
+        "DELETE FROM duplicate_scan_items WHERE scan_id IN (SELECT id FROM duplicate_scans WHERE channel_ref=?)",
+        (channel_ref,),
+    )
+    cur = conn.execute(
+        "DELETE FROM duplicate_scans WHERE channel_ref=?",
+        (channel_ref,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def insert_item(
     scan_id: int,
     message_id: int,
@@ -76,7 +107,7 @@ def insert_item(
            VALUES (?,?,?,?,?,?,?)""",
         (scan_id, message_id, media_id, media_type, file_size, mime_type, msg_date),
     )
-    # Caller is responsible for committing in batches for performance
+    # Caller commits in batches for performance
 
 
 def get_duplicate_groups(scan_id: int) -> list[dict[str, Any]]:
@@ -110,41 +141,68 @@ def get_items_for_media(scan_id: int, media_id: int) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def reset_running_scans_to_pending() -> int:
+    """Reset any scans stuck in 'running' back to 'pending' (used on startup and after network drops)."""
+    conn = get_connection()
+    cur = conn.execute(
+        "UPDATE duplicate_scans SET status='pending' WHERE status='running'"
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def get_pending_scan() -> dict[str, Any] | None:
     conn = get_connection()
     row = conn.execute(
-        """SELECT ds.id AS scan_id, ds.source_id,
-                  s.channel_ref, s.title, s.username
-           FROM duplicate_scans ds
-           JOIN sources s ON s.id = ds.source_id
-           WHERE ds.status='pending'
-           ORDER BY ds.created_at ASC
+        """SELECT id AS scan_id, channel_ref, channel_title, dest_id
+           FROM duplicate_scans
+           WHERE status='pending'
+           ORDER BY created_at ASC
            LIMIT 1"""
     ).fetchone()
     return dict(row) if row else None
 
 
-def get_latest_scan(source_id: int) -> dict[str, Any] | None:
+def get_scan_by_id(scan_id: int) -> dict[str, Any] | None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM duplicate_scans WHERE id=?", (scan_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_latest_scan_for_channel(channel_ref: str) -> dict[str, Any] | None:
     conn = get_connection()
     row = conn.execute(
         """SELECT * FROM duplicate_scans
-           WHERE source_id=?
+           WHERE channel_ref=?
            ORDER BY created_at DESC
            LIMIT 1""",
-        (source_id,),
+        (channel_ref,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def get_all_scans(limit: int = 20) -> list[dict[str, Any]]:
+    """Return recent scans for the scan list screen."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT * FROM duplicate_scans
+           ORDER BY created_at DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
 # Delete scan jobs
 # ---------------------------------------------------------------------------
 
-def create_delete_job(scan_id: int, source_id: int) -> int:
+def create_delete_job(scan_id: int) -> int:
     conn = get_connection()
     cur = conn.execute(
-        "INSERT INTO delete_scan_jobs(scan_id, source_id) VALUES (?,?)",
-        (scan_id, source_id),
+        "INSERT INTO delete_scan_jobs(scan_id) VALUES (?)", (scan_id,)
     )
     conn.commit()
     return cur.lastrowid
@@ -153,10 +211,10 @@ def create_delete_job(scan_id: int, source_id: int) -> int:
 def get_pending_delete_job() -> dict[str, Any] | None:
     conn = get_connection()
     row = conn.execute(
-        """SELECT dsj.id, dsj.scan_id, dsj.source_id,
-                  s.channel_ref, s.title, s.username
+        """SELECT dsj.id, dsj.scan_id,
+                  ds.channel_ref, ds.channel_title
            FROM delete_scan_jobs dsj
-           JOIN sources s ON s.id = dsj.source_id
+           JOIN duplicate_scans ds ON ds.id = dsj.scan_id
            WHERE dsj.status='pending'
            ORDER BY dsj.created_at ASC
            LIMIT 1"""

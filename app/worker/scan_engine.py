@@ -17,12 +17,12 @@ from app.worker.telegram_utils import get_entity_safe
 
 logger = logging.getLogger(__name__)
 
-_PROGRESS_INTERVAL  = 100  # update DB progress every N messages
-_DELETE_BATCH_SIZE  = 100  # Telegram allows up to 100 deletions per call
-_DELETE_SLEEP_S     = 1.5  # pause between delete batches
-_MSG_SLEEP_S        = 0.5  # pause between each fetched message
-_BATCH_SLEEP_S      = 10.0 # longer pause every _BATCH_EVERY messages
-_BATCH_EVERY        = 50   # messages between batch pauses
+_DELETE_BATCH_SIZE = 100   # Telegram allows up to 100 deletions per call
+_DELETE_SLEEP_S    = 1.5   # pause between delete batches
+_MSG_SLEEP_S       = 0.5   # pause between each fetched message
+_BATCH_SLEEP_S     = 10.0  # longer pause every _BATCH_EVERY messages
+_BATCH_EVERY       = 50    # messages between batch pauses
+_PROGRESS_EVERY    = 10    # update DB progress every N messages
 
 
 class ScanEngine:
@@ -33,18 +33,25 @@ class ScanEngine:
     # Public entry points
     # -----------------------------------------------------------------------
 
-    async def run_scan(self, scan_id: int, source_id: int, channel_ref: str) -> None:
+    async def run_scan(self, scan_id: int) -> None:
         """Iterate all messages in the channel and record media IDs for dedup analysis."""
+        scan_data = scan_repo.get_scan_by_id(scan_id)
+        if scan_data is None:
+            logger.error("Scan #%d not found in DB", scan_id)
+            return
+
+        channel_ref = scan_data["channel_ref"]
+        channel_title = scan_data.get("channel_title") or channel_ref
+
         scan_repo.start_scan(scan_id)
-        logger.info("Scan #%d: starting for source_id=%d ref=%s", scan_id, source_id, channel_ref)
+        logger.info("Scan #%d: starting for channel=%s", scan_id, channel_ref)
 
         try:
             entity = await get_entity_safe(self._client, channel_ref)
             if entity is None:
-                scan_repo.fail_scan(scan_id, f"Could not resolve channel: {channel_ref}")
+                scan_repo.fail_scan(scan_id, f"לא ניתן לפתור ערוץ: {channel_ref}")
                 return
 
-            # Get total message count for progress tracking
             total = await self._get_total_messages(entity)
             scan_repo.update_progress(scan_id, 0, total)
 
@@ -67,8 +74,9 @@ class ScanEngine:
                 if not msg or not msg.media:
                     scanned += 1
                     await asyncio.sleep(_MSG_SLEEP_S)
-                    if scanned % _BATCH_EVERY == 0:
+                    if scanned % _PROGRESS_EVERY == 0:
                         scan_repo.update_progress(scan_id, scanned, total)
+                    if scanned % _BATCH_EVERY == 0:
                         await asyncio.sleep(_BATCH_SLEEP_S)
                     continue
 
@@ -76,8 +84,9 @@ class ScanEngine:
                 if media_id is None:
                     scanned += 1
                     await asyncio.sleep(_MSG_SLEEP_S)
-                    if scanned % _BATCH_EVERY == 0:
+                    if scanned % _PROGRESS_EVERY == 0:
                         scan_repo.update_progress(scan_id, scanned, total)
+                    if scanned % _BATCH_EVERY == 0:
                         await asyncio.sleep(_BATCH_SLEEP_S)
                     continue
 
@@ -94,23 +103,23 @@ class ScanEngine:
 
                 scanned += 1
                 await asyncio.sleep(_MSG_SLEEP_S)
-                if scanned % _BATCH_EVERY == 0:
+                if scanned % _PROGRESS_EVERY == 0:
                     conn.commit()
                     scan_repo.update_progress(scan_id, scanned, total)
+                if scanned % _BATCH_EVERY == 0:
+                    conn.commit()
                     await asyncio.sleep(_BATCH_SLEEP_S)
 
-            # Final commit for any remaining inserts
+            # Final commit and progress update
             conn.commit()
             scan_repo.update_progress(scan_id, scanned, total)
 
-            # Compute duplicate groups
             groups = scan_repo.get_duplicate_groups(scan_id)
             wasted = sum(g["total_count"] - 1 for g in groups)
 
-            # Build Telegraph report if there are duplicates
             report_url: str | None = None
             if groups:
-                report_url = await self._build_report(scan_id, groups, channel_ref)
+                report_url = await self._build_report(scan_id, groups, channel_ref, channel_title)
 
             scan_repo.finish_scan(scan_id, len(groups), wasted, report_url)
             logger.info(
@@ -133,7 +142,7 @@ class ScanEngine:
         try:
             entity = await get_entity_safe(self._client, channel_ref)
             if entity is None:
-                scan_repo.fail_delete_job(delete_job_id, f"Could not resolve channel: {channel_ref}")
+                scan_repo.fail_delete_job(delete_job_id, f"לא ניתן לפתור ערוץ: {channel_ref}")
                 return
 
             groups = scan_repo.get_duplicate_groups(scan_id)
@@ -141,15 +150,13 @@ class ScanEngine:
                 scan_repo.finish_delete_job(delete_job_id, 0)
                 return
 
-            # Collect message IDs to delete (skip oldest per group)
             ids_to_delete: list[int] = []
             for group in groups:
                 items = scan_repo.get_items_for_media(scan_id, group["media_id"])
-                # items are sorted by msg_date ASC — keep first, delete rest
+                # keep first (oldest), delete rest
                 for item in items[1:]:
                     ids_to_delete.append(item["message_id"])
 
-            # Delete in batches
             total_deleted = 0
             for i in range(0, len(ids_to_delete), _DELETE_BATCH_SIZE):
                 batch = ids_to_delete[i : i + _DELETE_BATCH_SIZE]
@@ -179,7 +186,6 @@ class ScanEngine:
     # -----------------------------------------------------------------------
 
     async def _get_total_messages(self, entity: Any) -> int:
-        """Return the total number of messages in the channel (best-effort)."""
         for attempt in range(3):
             try:
                 result = await self._client(GetHistoryRequest(
@@ -204,10 +210,6 @@ class ScanEngine:
 
     @staticmethod
     def _extract_media_info(msg: Any) -> tuple[int | None, str, int | None, str | None]:
-        """
-        Return (media_id, media_type, file_size, mime_type) for a message, or
-        (None, '', None, None) if the message has no trackable media.
-        """
         media = msg.media
         type_name = type(media).__name__
 
@@ -221,7 +223,6 @@ class ScanEngine:
             photo = getattr(media, "photo", None)
             if photo is None:
                 return None, "", None, None
-            # Estimate size from largest PhotoSize
             size = None
             for s in getattr(photo, "sizes", []):
                 sz = getattr(s, "size", None)
@@ -236,18 +237,24 @@ class ScanEngine:
         scan_id: int,
         groups: list[dict[str, Any]],
         channel_ref: str,
+        channel_title: str,
     ) -> str | None:
-        """Build a Telegraph report with links to duplicate messages."""
         from app.services import telegraph_service
         from app.repositories.scan_repo import get_items_for_media
 
-        # Resolve channel username for t.me links
+        # Try to get resolved_id and username from destinations table first, then sources
         from app.db import get_connection
         conn = get_connection()
         row = conn.execute(
-            "SELECT username, resolved_id FROM sources WHERE channel_ref=? LIMIT 1",
+            "SELECT username, resolved_id FROM destinations WHERE channel_ref=? LIMIT 1",
             (channel_ref,),
         ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT username, resolved_id FROM sources WHERE channel_ref=? LIMIT 1",
+                (channel_ref,),
+            ).fetchone()
+
         username = row["username"] if row else None
         resolved_id = row["resolved_id"] if row else None
 

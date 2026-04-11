@@ -212,18 +212,29 @@ class CopyEngine:
                         already_done.add(m.id)
                         copied += 1
                 else:
-                    for m in to_send:
-                        st, reason = await _send_single(m)
-                        if st == "copied":
-                            copied += 1
-                        else:
-                            failed += 1
-                            logger.warning(
-                                "Job #%d: failed to send msg #%d individually: %s",
-                                job.id, m.id, reason,
-                            )
-                        job_repo.record_copied_message(job.id, m.id, None, st, reason)
-                        already_done.add(m.id)
+                    # Send only the first message individually (it's the one causing the issue),
+                    # then put the rest back into the buffer so they can form a new album.
+                    first = to_send[0]
+                    st, reason = await _send_single(first)
+                    if st == "copied":
+                        copied += 1
+                    else:
+                        failed += 1
+                        logger.warning(
+                            "Job #%d: failed to send msg #%d individually: %s",
+                            job.id, first.id, reason,
+                        )
+                    job_repo.record_copied_message(job.id, first.id, None, st, reason)
+                    already_done.add(first.id)
+
+                    # Re-queue the remaining messages for the next album attempt
+                    if len(to_send) > 1:
+                        remaining = to_send[1:]
+                        logger.info(
+                            "Job #%d: re-queuing %d messages back to solo buffer after album failure",
+                            job.id, len(remaining),
+                        )
+                        solo_media_buffer = remaining + solo_media_buffer
 
             job_repo.update_progress(job.id, copied, skipped, failed, last_id)
             if job_repo.is_paused(job.id):

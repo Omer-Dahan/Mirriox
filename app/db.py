@@ -107,7 +107,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 CREATE TABLE IF NOT EXISTS duplicate_scans (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_id        INTEGER NOT NULL REFERENCES sources(id),
+    channel_ref      TEXT NOT NULL DEFAULT '',
+    channel_title    TEXT NOT NULL DEFAULT '',
+    dest_id          INTEGER REFERENCES destinations(id),
     status           TEXT NOT NULL DEFAULT 'pending'
                      CHECK(status IN ('pending','running','done','failed')),
     messages_scanned INTEGER DEFAULT 0,
@@ -134,7 +136,6 @@ CREATE TABLE IF NOT EXISTS duplicate_scan_items (
 CREATE TABLE IF NOT EXISTS delete_scan_jobs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     scan_id       INTEGER NOT NULL REFERENCES duplicate_scans(id),
-    source_id     INTEGER NOT NULL REFERENCES sources(id),
     status        TEXT NOT NULL DEFAULT 'pending'
                   CHECK(status IN ('pending','running','done','failed')),
     deleted_count INTEGER DEFAULT 0,
@@ -219,6 +220,10 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         _add_column_if_missing(conn, table, "photos_count",       "INTEGER")
         _add_column_if_missing(conn, table, "videos_count",       "INTEGER")
         _add_column_if_missing(conn, table, "docs_count",         "INTEGER")
+    # duplicate_scans: rebuild table if old source_id NOT NULL constraint exists
+    _migrate_duplicate_scans(conn)
+    # delete_scan_jobs: rebuild table if old source_id NOT NULL column exists
+    _migrate_delete_scan_jobs(conn)
     _seed_missing_settings(conn, {
         "flood_buffer_min_s": "5",
         "flood_buffer_max_s": "10",
@@ -228,6 +233,117 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         "batch_pause_max_s":  "120",
         "group_media":        "1",
     })
+
+
+def _migrate_duplicate_scans(conn: sqlite3.Connection) -> None:
+    """
+    Rebuild duplicate_scans if it still has source_id NOT NULL.
+    Preserves existing rows by copying common columns.
+    """
+    try:
+        # Check if duplicate_scans table exists at all
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='duplicate_scans'"
+        ).fetchone()
+        if not exists:
+            return  # Will be created by SCHEMA_SQL with correct definition
+
+        # Use PRAGMA table_info to check if source_id is NOT NULL (notnull=1)
+        cols = {row[1]: row for row in conn.execute("PRAGMA table_info(duplicate_scans)")}
+        source_col = cols.get("source_id")
+        if source_col is None or source_col[3] == 0:
+            # source_id doesn't exist or is already nullable — migration not needed
+            return
+
+        logger.info("Migration: rebuilding duplicate_scans to remove source_id NOT NULL")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE IF EXISTS duplicate_scans_v2")
+        conn.execute("""
+            CREATE TABLE duplicate_scans_v2 (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_ref      TEXT NOT NULL DEFAULT '',
+                channel_title    TEXT NOT NULL DEFAULT '',
+                dest_id          INTEGER REFERENCES destinations(id),
+                status           TEXT NOT NULL DEFAULT 'pending'
+                                 CHECK(status IN ('pending','running','done','failed')),
+                messages_scanned INTEGER DEFAULT 0,
+                total_messages   INTEGER DEFAULT 0,
+                duplicate_groups INTEGER DEFAULT 0,
+                wasted_count     INTEGER DEFAULT 0,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at     TEXT,
+                report_url       TEXT,
+                error_msg        TEXT
+            )
+        """)
+        # Copy rows that exist; map source_id→channel_ref via sources table where possible
+        conn.execute("""
+            INSERT INTO duplicate_scans_v2
+                (id, channel_ref, channel_title, status,
+                 messages_scanned, total_messages, duplicate_groups, wasted_count,
+                 created_at, completed_at, report_url, error_msg)
+            SELECT
+                ds.id,
+                COALESCE(s.channel_ref, CAST(ds.source_id AS TEXT), '') AS channel_ref,
+                COALESCE(s.title, s.name, '') AS channel_title,
+                ds.status,
+                ds.messages_scanned, ds.total_messages,
+                ds.duplicate_groups, ds.wasted_count,
+                ds.created_at, ds.completed_at, ds.report_url, ds.error_msg
+            FROM duplicate_scans ds
+            LEFT JOIN sources s ON s.id = ds.source_id
+        """)
+        conn.execute("DROP TABLE duplicate_scans")
+        conn.execute("ALTER TABLE duplicate_scans_v2 RENAME TO duplicate_scans")
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        logger.info("Migration: duplicate_scans rebuilt successfully")
+    except Exception:
+        logger.exception("Migration _migrate_duplicate_scans failed — skipping")
+        conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _migrate_delete_scan_jobs(conn: sqlite3.Connection) -> None:
+    """
+    Rebuild delete_scan_jobs if it still has the old source_id NOT NULL column.
+    That column was removed from the schema but never migrated in existing DBs.
+    """
+    try:
+        cols = {row[1]: row for row in conn.execute("PRAGMA table_info(delete_scan_jobs)")}
+        source_col = cols.get("source_id")
+        if source_col is None or source_col[3] == 0:
+            # source_id doesn't exist or is already nullable — no migration needed
+            return
+
+        logger.info("Migration: rebuilding delete_scan_jobs to remove source_id NOT NULL")
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE IF EXISTS delete_scan_jobs_v2")
+        conn.execute("""
+            CREATE TABLE delete_scan_jobs_v2 (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id       INTEGER NOT NULL REFERENCES duplicate_scans(id),
+                status        TEXT NOT NULL DEFAULT 'pending'
+                              CHECK(status IN ('pending','running','done','failed')),
+                deleted_count INTEGER DEFAULT 0,
+                error_msg     TEXT,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at  TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO delete_scan_jobs_v2
+                (id, scan_id, status, deleted_count, error_msg, created_at, completed_at)
+            SELECT id, scan_id, status, deleted_count, error_msg, created_at, completed_at
+            FROM delete_scan_jobs
+        """)
+        conn.execute("DROP TABLE delete_scan_jobs")
+        conn.execute("ALTER TABLE delete_scan_jobs_v2 RENAME TO delete_scan_jobs")
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        logger.info("Migration: delete_scan_jobs rebuilt successfully")
+    except Exception:
+        logger.exception("Migration _migrate_delete_scan_jobs failed — skipping")
+        conn.execute("PRAGMA foreign_keys=ON")
 
 
 def _migrate_copied_messages_no_cascade(conn: sqlite3.Connection) -> None:

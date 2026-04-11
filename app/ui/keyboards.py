@@ -49,8 +49,8 @@ def kb_main_menu() -> InlineKeyboardMarkup:
         [_btn(texts.BTN_JOBS, "menu:jobs"), _btn(texts.BTN_NEW_JOB, "job:new")],
         [_btn(texts.BTN_SOURCES, "menu:sources"), _btn(texts.BTN_DESTINATIONS, "menu:destinations")],
         [_btn(texts.BTN_BLOCKED_WORDS, "menu:filters"), _btn(texts.BTN_ADMINS, "menu:admins")],
-        [_btn(texts.BTN_SETTINGS, "menu:settings")],
-        [_btn(texts.BTN_TRANSFER_STATS, "menu:stats")],
+        [_btn(texts.BTN_SETTINGS, "menu:settings"), _btn(texts.BTN_TRANSFER_STATS, "menu:stats")],
+        [_btn(texts.BTN_SCAN_DUPES_MENU, "menu:scan")],
     ])
 
 
@@ -218,31 +218,54 @@ def kb_source_list(sources: list["Source"], page: int = 0) -> InlineKeyboardMark
 def kb_source_detail(source_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [_btn(texts.BTN_REFRESH + " מידע", f"src:{source_id}:refresh_info")],
-        [_btn(texts.BTN_SCAN_DUPES, f"src:{source_id}:scan_dupes")],
         [_btn(texts.BTN_DELETE, f"src:{source_id}:confirm_delete")],
         [_btn(texts.BTN_BACK, "menu:sources")],
     ])
 
 
-def kb_scan_report(source_id: int, status: str, has_dupes: bool, report_url: str | None = None) -> InlineKeyboardMarkup:
+def kb_scan_picker(dests: list["Destination"]) -> InlineKeyboardMarkup:
     rows = []
-    if status == "running" or status == "pending":
-        rows.append([_btn(texts.BTN_REFRESH, f"src:{source_id}:view_scan")])
-    elif status == "done" and has_dupes:
-        rows.append([_btn(texts.BTN_DELETE_DUPES, f"src:{source_id}:confirm_delete_dupes")])
-        rows.append([_btn(texts.BTN_RESCAN, f"src:{source_id}:scan_dupes")])
-    elif status == "done":
-        rows.append([_btn(texts.BTN_RESCAN, f"src:{source_id}:scan_dupes")])
-    elif status == "failed":
-        rows.append([_btn(texts.BTN_RETRY_SCAN, f"src:{source_id}:scan_dupes")])
-    rows.append([_btn(texts.BTN_BACK, f"src:{source_id}:view")])
+    for dest in dests:
+        label = (dest.title or dest.name or dest.channel_ref)[:45]
+        rows.append([_btn(f"📤 {label}", f"scan:dst:{dest.id}")])
+    rows.append([_btn("✏️ הזן ידנית", "scan:manual")])
+    rows.append([_btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 
 
-def kb_confirm_delete_dupes(source_id: int) -> InlineKeyboardMarkup:
+def kb_scan_cancel() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[_btn(texts.BTN_CANCEL, "menu:scan")]])
+
+
+def kb_scan_report(scan_id: int, status: str, has_dupes: bool, report_url: str | None = None) -> InlineKeyboardMarkup:
+    rows = []
+    if status in ("running", "pending"):
+        rows.append([
+            _btn(texts.BTN_REFRESH, f"scan:view:{scan_id}"),
+            _btn(texts.BTN_STOP_SCAN, f"scan:stop:{scan_id}"),
+        ])
+    elif status == "done" and has_dupes:
+        rows.append([_btn(texts.BTN_DELETE_DUPES, f"scan:confirm_delete:{scan_id}")])
+        rows.append([_btn(texts.BTN_RESCAN, f"scan:rescan:{scan_id}")])
+    elif status == "done":
+        rows.append([_btn(texts.BTN_RESCAN, f"scan:rescan:{scan_id}")])
+    elif status == "failed":
+        rows.append([_btn(texts.BTN_START_SCAN, f"scan:rescan:{scan_id}")])
+    rows.append([_btn(texts.BTN_RESET_SCAN, f"scan:confirm_reset:{scan_id}"), _btn(texts.BTN_BACK, "menu:scan")])
+    return InlineKeyboardMarkup(rows)
+
+
+def kb_confirm_reset_scan(scan_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        _btn(texts.BTN_YES_DELETE, f"src:{source_id}:delete_dupes"),
-        _btn(texts.BTN_CANCEL, f"src:{source_id}:view_scan"),
+        _btn(texts.BTN_CONFIRM_RESET, f"scan:reset:{scan_id}"),
+        _btn(texts.BTN_CANCEL, f"scan:view:{scan_id}"),
+    ]])
+
+
+def kb_confirm_delete_dupes(scan_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        _btn(texts.BTN_YES_DELETE, f"scan:delete:{scan_id}"),
+        _btn(texts.BTN_CANCEL, f"scan:view:{scan_id}"),
     ]])
 
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 from telegram import Update
-from telegram.ext import ContextTypes
 from telegram.error import TelegramError
+from telegram.ext import ContextTypes
 
 from app.repositories import state_repo
 from app.ui import renderer
@@ -51,5 +51,4 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Mark that main menu is currently visible
     context.bot_data["on_main_screen"] = True
-
     logger.info("Main control message created: chat=%d msg=%d", chat_id, msg.message_id)

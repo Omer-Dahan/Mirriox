@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError, BadRequest
@@ -10,6 +11,9 @@ from app.repositories import state_repo
 
 logger = logging.getLogger(__name__)
 
+# Tracks the start time of the current connectivity gap (None = connected)
+_disconnected_since: datetime | None = None
+
 
 async def update_main_message(
     context: ContextTypes.DEFAULT_TYPE,
@@ -17,6 +21,8 @@ async def update_main_message(
     keyboard: InlineKeyboardMarkup,
 ) -> None:
     """Edit the stored main control message with new text + keyboard."""
+    global _disconnected_since
+
     chat_id_str = state_repo.get_setting("main_chat_id")
     msg_id_str = state_repo.get_setting("main_message_id")
 
@@ -32,13 +38,23 @@ async def update_main_message(
             reply_markup=keyboard,
             parse_mode="HTML",
         )
+        # Log recovery if we were previously disconnected
+        if _disconnected_since is not None:
+            downtime_s = (datetime.utcnow() - _disconnected_since).total_seconds()
+            logger.info("Bot reconnected successfully after %.0fs", downtime_s)
+            _disconnected_since = None
     except BadRequest as e:
         if "message is not modified" in str(e).lower():
             pass  # Already showing this content, not an error
         else:
             logger.warning("Failed to edit main message: %s", e)
     except TelegramError as e:
-        logger.warning("Failed to edit main message: %s", e)
+        if _disconnected_since is None:
+            _disconnected_since = datetime.utcnow()
+            logger.warning("Bot lost connectivity at %s: %s", _disconnected_since.strftime("%H:%M:%S"), e)
+        else:
+            downtime_s = (datetime.utcnow() - _disconnected_since).total_seconds()
+            logger.warning("Bot still disconnected (%.0fs so far): %s", downtime_s, e)
 
 
 async def answer_callback(update: Update, text: str = "") -> None:

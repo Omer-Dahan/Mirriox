@@ -13,6 +13,8 @@ from telegram.ext import (
     ContextTypes,
 )
 
+from telegram.request import HTTPXRequest
+
 from app.config import Config
 from app.repositories import admin_repo
 from app.bot.handlers import (
@@ -21,6 +23,7 @@ from app.bot.handlers import (
     source_handlers,
     filter_handlers,
     admin_handlers,
+    scan_handlers,
 )
 from app.ui import renderer
 from app.bot.handlers._common import update_main_message, answer_callback
@@ -144,6 +147,9 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             text, kb = renderer.render_transfer_stats()
             await update_main_message(context, text, kb)
 
+        elif data.startswith("scan:") or data == "menu:scan":
+            await scan_handlers.dispatch_scan(update, context)
+
         else:
             await update.callback_query.answer()
             logger.warning("Unhandled callback data: %s", data)
@@ -189,7 +195,8 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         "dest_ref":      source_handlers.handle_dest_ref,
         "filter_word":   filter_handlers.handle_filter_word,
         "admin_id":      admin_handlers.handle_admin_id,
-        "setting_value": admin_handlers.handle_setting_value,
+        "setting_value":    admin_handlers.handle_setting_value,
+        "scan_channel_ref": scan_handlers.handle_scan_channel_ref,
     }
 
     handler_fn = _dispatch.get(awaiting)
@@ -231,7 +238,22 @@ async def _auto_refresh_main_menu(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def build_application(config: Config) -> Application:
-    app = Application.builder().token(config.BOT_TOKEN).build()
+    # Force HTTP/1.1 to avoid httpx HTTP/2 connection-pool stalls on Windows
+    # after transient network drops (the pool gets stuck and won't recover quickly
+    # with HTTP/2 multiplexing on unstable connections).
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=30,
+        read_timeout=30,
+        write_timeout=30,
+        http_version="1.1",
+    )
+    app = (
+        Application.builder()
+        .token(config.BOT_TOKEN)
+        .request(request)
+        .build()
+    )
 
     # Store bootstrap admin IDs for handlers to access
     app.bot_data["admin_ids"] = config.ADMIN_IDS
@@ -290,11 +312,23 @@ async def run_async(config: Config) -> None:
     global _app
     app = build_application(config)
     _app = app
-    async with app:
+
+    # Retry initialize() until it succeeds — network may not be ready at startup.
+    # We manage the lifecycle manually (instead of `async with app:`) so that
+    # initialize() can be retried without recreating the whole Application.
+    _INIT_RETRY_S = 5
+    while True:
+        try:
+            await app.initialize()
+            break
+        except Exception as exc:
+            logger.warning("Bot init failed (%s) — retrying in %ds...", exc, _INIT_RETRY_S)
+            await asyncio.sleep(_INIT_RETRY_S)
+
+    try:
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)  # type: ignore[union-attr]
         logger.info("Management bot started")
-        # Keep running until cancelled
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -302,3 +336,5 @@ async def run_async(config: Config) -> None:
         finally:
             await app.updater.stop()  # type: ignore[union-attr]
             await app.stop()
+    finally:
+        await app.shutdown()

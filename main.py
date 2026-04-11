@@ -170,10 +170,13 @@ def _run_main(logger: logging.Logger) -> None:
 
 
 async def _run_with_restart(name: str, coro_fn, config) -> None:
-    """Wrap a long-running coroutine with automatic restart on network errors."""
+    """Wrap a long-running coroutine with automatic restart on network errors.
+
+    Always retries after a fixed 5s delay so recovery is quick after the
+    network comes back (no exponential backoff that grows to minutes).
+    """
     _logger = logging.getLogger(__name__)
-    delay = 5
-    max_delay = 120
+    _RETRY_DELAY_S = 5
     while True:
         try:
             await coro_fn(config)
@@ -182,10 +185,9 @@ async def _run_with_restart(name: str, coro_fn, config) -> None:
             if is_network_error(exc):
                 _logger.warning(
                     "[%s] ניתוק רשת (%s) — מנסה שוב בעוד %ds...",
-                    name, exc, delay,
+                    name, exc, _RETRY_DELAY_S,
                 )
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, max_delay)
+                await asyncio.sleep(_RETRY_DELAY_S)
             else:
                 _logger.exception("[%s] שגיאה קריטית — מפסיק: %s", name, exc)
                 raise

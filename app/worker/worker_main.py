@@ -65,7 +65,9 @@ async def _async_run(config: Config) -> None:
         config.TELETHON_SESSION,
         config.TELETHON_API_ID,
         config.TELETHON_API_HASH,
-        flood_sleep_threshold=0,  # Never auto-sleep — always raise FloodWaitError so we can log and requeue
+        flood_sleep_threshold=0,   # Never auto-sleep — always raise FloodWaitError so we can log and requeue
+        connection_retries=-1,     # Retry indefinitely on network drops (default is 5 then gives up)
+        retry_delay=2,             # Wait 2s between internal Telethon reconnect attempts
     )
 
     logger.info("Connecting to Telegram as userbot...")
@@ -277,22 +279,30 @@ async def _poll_loop(config: Config, engine: CopyEngine, scan_engine: ScanEngine
                 scan_task = scan_repo.get_pending_scan()
                 if scan_task:
                     logger.info(
-                        "Picked up duplicate scan #%d for source_id=%d",
-                        scan_task["scan_id"], scan_task["source_id"],
+                        "Picked up duplicate scan #%d for channel=%s",
+                        scan_task["scan_id"], scan_task["channel_ref"],
                     )
-                    await scan_engine.run_scan(
-                        scan_task["scan_id"],
-                        scan_task["source_id"],
-                        scan_task["channel_ref"],
-                    )
+                    try:
+                        await scan_engine.run_scan(scan_task["scan_id"])
+                    except Exception as e:
+                        if is_network_error(e):
+                            logger.warning(
+                                "Scan #%d: network error (%s) — resetting to pending for retry",
+                                scan_task["scan_id"], e,
+                            )
+                            scan_repo.reset_running_scans_to_pending()
+                            await _reconnect_client(client)
+                        else:
+                            logger.exception("Scan #%d: unexpected error: %s", scan_task["scan_id"], e)
+                            scan_repo.fail_scan(scan_task["scan_id"], str(e)[:500])
                     continue
 
                 # Check for pending bulk-delete jobs
                 del_task = scan_repo.get_pending_delete_job()
                 if del_task:
                     logger.info(
-                        "Picked up delete job #%d for scan_id=%d",
-                        del_task["id"], del_task["scan_id"],
+                        "Picked up delete job #%d for scan_id=%d channel=%s",
+                        del_task["id"], del_task["scan_id"], del_task["channel_ref"],
                     )
                     await scan_engine.run_delete(
                         del_task["id"],
@@ -388,9 +398,14 @@ def _startup_recovery() -> None:
         job_repo.update_status(job.id, "pending")
         recovered += 1
 
+    # Reset any scans stuck in 'running' state from a previous crash
+    stuck_scans = scan_repo.reset_running_scans_to_pending()
+    if stuck_scans:
+        logger.info("Recovery: reset %d stuck scan(s) back to pending", stuck_scans)
+
     if recovered:
         logger.info("Recovery: re-queued %d job(s)", recovered)
-    else:
+    elif not stuck_scans:
         logger.info("Recovery: no action needed")
 
     state_repo.set_worker_status("idle")

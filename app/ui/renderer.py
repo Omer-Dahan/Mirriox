@@ -102,32 +102,31 @@ def render_transfer_stats() -> tuple[str, InlineKeyboardMarkup]:
     return texts.transfer_stats_text(stats), keyboards.kb_transfer_stats()
 
 
-def render_scan_report(source_id: int) -> tuple[str, InlineKeyboardMarkup]:
+def render_scan_picker() -> tuple[str, InlineKeyboardMarkup]:
+    dests = source_repo.get_all_destinations()
+    return texts.scan_picker_text(dests), keyboards.kb_scan_picker(dests)
+
+
+def render_scan_report_by_id(scan_id: int) -> tuple[str, InlineKeyboardMarkup]:
     from app.repositories import scan_repo
-    src = source_repo.get_source_by_id(source_id)
-    if src is None:
-        return texts.error_text("מקור לא נמצא"), keyboards.kb_error_back("sources")
-    channel_name = src.title or src.name or src.channel_ref
-    scan = scan_repo.get_latest_scan(source_id)
+    scan = scan_repo.get_scan_by_id(scan_id)
     if scan is None:
-        return (
-            texts.error_text("לא נמצאה סריקה עבור ערוץ זה"),
-            keyboards.kb_error_back(f"src:{source_id}:view"),
-        )
+        return texts.error_text("סריקה לא נמצאה"), keyboards.kb_error_back("scan")
+    channel_name = scan.get("channel_title") or scan.get("channel_ref") or "—"
     has_dupes = (scan.get("duplicate_groups") or 0) > 0
     return (
         texts.scan_report_text(scan, channel_name),
-        keyboards.kb_scan_report(source_id, scan["status"], has_dupes, scan.get("report_url")),
+        keyboards.kb_scan_report(scan_id, scan["status"], has_dupes, scan.get("report_url")),
     )
 
 
-def render_confirm_delete_dupes(source_id: int) -> tuple[str, InlineKeyboardMarkup]:
+def render_confirm_delete_dupes_by_id(scan_id: int) -> tuple[str, InlineKeyboardMarkup]:
     from app.repositories import scan_repo
-    scan = scan_repo.get_latest_scan(source_id)
+    scan = scan_repo.get_scan_by_id(scan_id)
     wasted = (scan or {}).get("wasted_count", 0)
     return (
         texts.confirm_delete_dupes_text(wasted),
-        keyboards.kb_confirm_delete_dupes(source_id),
+        keyboards.kb_confirm_delete_dupes(scan_id),
     )
 
 

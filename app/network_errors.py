@@ -4,6 +4,7 @@ from __future__ import annotations
 NETWORK_ERROR_HINTS = (
     "getaddrinfo failed",
     "ConnectError",
+    "ConnectTimeout",
     "ConnectionError",
     "ConnectionResetError",
     "ConnectionAbortedError",
@@ -11,6 +12,8 @@ NETWORK_ERROR_HINTS = (
     "ReadError",
     "NetworkError",
     "TimeoutError",
+    "TimedOut",           # telegram.error.TimedOut (PTB timeout on HTTP requests)
+    "Timed out",          # message text of telegram.error.TimedOut
     "WinError 1231",
     "WinError 1232",
     "WinError 1236",

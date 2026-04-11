@@ -99,8 +99,14 @@ TITLE_CONFIRM_DELETE  = "⚠️ <b>אישור מחיקה</b>"
 TITLE_CONFIRM_CANCEL  = "⚠️ <b>אישור ביטול</b>"
 TITLE_CONFIRM_CLEAR   = "⚠️ <b>אישור מחיקת כל המילים</b>"
 TITLE_ERROR           = "❌ <b>שגיאה</b>"
-TITLE_SCAN_REPORT     = "🔍 <b>דוח כפילויות</b>"
+TITLE_SCAN_REPORT          = "🔍 <b>דוח כפילויות</b>"
+TITLE_SCAN_PICKER          = "🔍 <b>סריקת כפילויות</b>"
 TITLE_CONFIRM_DELETE_DUPES = "⚠️ <b>אישור מחיקת כפילויות</b>"
+BTN_SCAN_DUPES_MENU        = "🔍 סריקת כפילויות"
+BTN_START_SCAN             = "▶️ התחל סריקה"
+BTN_STOP_SCAN              = "⏹ עצור סריקה"
+BTN_RESET_SCAN             = "🗑 אפס נתונים"
+BTN_CONFIRM_RESET          = "✅ כן, אפס"
 
 # ── Main menu ──────────────────────────────────────────────────────────────────
 
@@ -355,6 +361,19 @@ def source_detail_text(source: "Source") -> str:
     )
 
 
+def scan_picker_text(dests: list) -> str:
+    if not dests:
+        return (
+            f"{TITLE_SCAN_PICKER}\n\n"
+            "לא הוגדרו ערוצי יעד. לחץ <b>הזן ידנית</b> כדי להזין כתובת ערוץ."
+        )
+    return (
+        f"{TITLE_SCAN_PICKER}\n\n"
+        "בחר ערוץ יעד לסריקה, או לחץ <b>הזן ידנית</b> להזנת כתובת ערוץ אחרת:\n"
+        "<i>(סריקה מאתרת קבצי מדיה כפולים בערוץ)</i>"
+    )
+
+
 def scan_report_text(scan: dict, channel_name: str) -> str:
     status = scan.get("status", "")
     scanned = scan.get("messages_scanned", 0)
@@ -367,26 +386,35 @@ def scan_report_text(scan: dict, channel_name: str) -> str:
     header = f"{TITLE_SCAN_REPORT} — <b>{esc(channel_name)}</b>\n\n"
 
     if status == "pending":
-        return header + "⏳ הסריקה ממתינה להתחלה..."
+        return header + "⏳ ממתין לתור (הוורקר יתחיל בקרוב)..."
 
     if status == "running":
         pct = int(scanned / total * 100) if total else 0
+        bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
         return (
             header
-            + f"▶️ סורק... {scanned:,} / {total:,} הודעות ({pct}%)\n"
-            + "לחץ רענן לעדכון"
+            + f"▶️ סורק...\n"
+            + f"[{bar}] {pct}%\n"
+            + f"{scanned:,} / {total:,} הודעות\n\n"
+            + "לחץ 🔄 לעדכון"
         )
 
     if status == "failed":
-        return header + f"❌ הסריקה נכשלה\n\n{esc(error or '')}"
+        reason = esc(error or "שגיאה לא ידועה")
+        return header + f"❌ הסריקה נכשלה / הופסקה\n\n{reason}\n\nלחץ ▶️ להתחלה מחדש"
 
     # done
     if groups == 0:
-        return header + f"✅ הסריקה הושלמה\n\n📊 נסרקו: {scanned:,} הודעות\n🎉 לא נמצאו כפילויות!"
+        return (
+            header
+            + f"✅ הסריקה הושלמה\n\n"
+            + f"📊 נסרקו: <b>{scanned:,}</b> הודעות\n"
+            + "🎉 לא נמצאו כפילויות!"
+        )
 
     lines = [
         header,
-        f"✅ הסריקה הושלמה\n",
+        "✅ הסריקה הושלמה\n",
         f"📊 נסרקו: <b>{scanned:,}</b> הודעות",
         f"🔁 קבוצות כפולות: <b>{groups:,}</b>",
         f"🗑 ניתן למחוק: <b>{wasted:,}</b> הודעות",

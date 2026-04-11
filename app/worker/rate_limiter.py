@@ -115,6 +115,6 @@ class RateLimiter:
         last_hour = sum(1 for t in self._sent_timestamps if t >= hour_ago)
         last_day = len(self._sent_timestamps)
         logger.info(
-            "Throughput: %d msgs/last-hour | %d msgs/last-24h",
+            "Throughput: %d msgs/last-hour | %d msgs/this-session (resets on restart)",
             last_hour, last_day,
         )
