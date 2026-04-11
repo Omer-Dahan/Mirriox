@@ -68,8 +68,8 @@ def kb_main_menu() -> InlineKeyboardMarkup:
         [_btn(texts.BTN_JOBS, "menu:jobs"), _btn(texts.BTN_NEW_JOB, "job:new")],
         [_btn(texts.BTN_SOURCES, "menu:sources"), _btn(texts.BTN_DESTINATIONS, "menu:destinations")],
         [_btn(texts.BTN_BLOCKED_WORDS, "menu:filters"), _btn(texts.BTN_ADMINS, "menu:admins")],
-        [_btn(texts.BTN_SETTINGS, "menu:settings"), _btn(texts.BTN_TRANSFER_STATS, "menu:stats")],
-        [_btn(texts.BTN_SCAN_DUPES_MENU, "menu:scan")],
+        [_btn(texts.BTN_SETTINGS, "menu:settings"), _btn(texts.BTN_SCAN_DUPES_MENU, "menu:scan")],
+        [_btn(texts.BTN_TRANSFER_STATS, "menu:stats")],
     ])
 
 

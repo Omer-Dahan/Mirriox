@@ -104,6 +104,51 @@ class _CollapseNetworkErrors(logging.Filter):
         return True
 
 
+class _TelethonReconnectFilter(logging.Filter):
+    """
+    Condenses Telethon's internal reconnect spam into exactly two lines:
+      - ONE warning when the connection first drops.
+      - ONE info  when the connection is successfully restored.
+    All intermediate "Attempt N at connecting failed" lines are suppressed.
+    A single shared instance should be attached to both noisy loggers so
+    only one pair of messages is emitted per disconnect cycle.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._disconnected = False  # tracks if we already emitted the drop warning
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        msg = record.getMessage()
+
+        # ── Disconnect signal ────────────────────────────────────────────────
+        # Matches: "Server closed the connection" and "Attempt N at connecting failed"
+        is_drop = "Server closed the connection" in msg or "connecting failed" in msg
+        if is_drop:
+            if not self._disconnected:
+                # Emit ONE consolidated warning
+                self._disconnected = True
+                record.levelno  = logging.WARNING
+                record.levelname = "WARNING"
+                record.msg  = "⚠️ ניתוק רשת — מנסה להתחבר מחדש בשקט..."
+                record.args = ()
+                return True
+            # Suppress all subsequent attempt lines
+            return False
+
+        # ── Reconnect success ────────────────────────────────────────────────
+        # Telethon logs "Connection to <DC> restored" at INFO level on success
+        if self._disconnected and "restored" in msg:
+            self._disconnected = False
+            record.levelno  = logging.INFO
+            record.levelname = "INFO"
+            record.msg  = "✅ חיבור לרשת חודש בהצלחה"
+            record.args = ()
+            return True
+
+        return True
+
+
 def _setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -113,6 +158,14 @@ def _setup_logging() -> None:
     logging.getLogger("telethon").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING)
+
+    # One shared stateful filter: emits ONE warning on disconnect, ONE info on restore.
+    # Both loggers share the same instance so only one pair of messages is emitted.
+    _reconnect_filter = _TelethonReconnectFilter()
+    logging.getLogger("telethon.network.connection.connection").setLevel(logging.WARNING)
+    logging.getLogger("telethon.network.connection.connection").addFilter(_reconnect_filter)
+    logging.getLogger("telethon.network.mtprotosender").setLevel(logging.INFO)
+    logging.getLogger("telethon.network.mtprotosender").addFilter(_reconnect_filter)
 
     # Collapse noisy network-error tracebacks to single WARNING lines
     _f = _CollapseNetworkErrors()
