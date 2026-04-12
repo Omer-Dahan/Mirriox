@@ -42,12 +42,20 @@ def update_progress(scan_id: int, scanned: int, total: int) -> None:
 
 def finish_scan(scan_id: int, groups: int, wasted_count: int, report_url: str | None = None) -> None:
     conn = get_connection()
+    # Store the highest message_id seen in this scan, for incremental future scans
+    max_msg_row = conn.execute(
+        "SELECT MAX(message_id) as max_id FROM duplicate_scan_items WHERE scan_id=?",
+        (scan_id,),
+    ).fetchone()
+    max_msg_id = (max_msg_row["max_id"] or 0) if max_msg_row else 0
+
     conn.execute(
         """UPDATE duplicate_scans
            SET status='done', duplicate_groups=?, wasted_count=?,
-               report_url=?, completed_at=datetime('now')
+               report_url=?, completed_at=datetime('now'),
+               last_scanned_message_id=?
            WHERE id=?""",
-        (groups, wasted_count, report_url, scan_id),
+        (groups, wasted_count, report_url, max_msg_id, scan_id),
     )
     conn.commit()
 
@@ -71,24 +79,35 @@ def cancel_scan(scan_id: int) -> None:
     conn.commit()
 
 
-def delete_scans_for_channel(channel_ref: str) -> int:
-    """Delete ALL scan records (and their items/delete-jobs via CASCADE) for a channel. Returns count deleted."""
+def delete_scan(scan_id: int) -> int:
+    """Delete a single scan record (and its items/delete-jobs). Returns count deleted."""
     conn = get_connection()
-    # delete_scan_jobs references duplicate_scans — delete them first
     conn.execute(
-        "DELETE FROM delete_scan_jobs WHERE scan_id IN (SELECT id FROM duplicate_scans WHERE channel_ref=?)",
-        (channel_ref,),
+        "DELETE FROM delete_scan_jobs WHERE scan_id=?",
+        (scan_id,),
     )
     conn.execute(
-        "DELETE FROM duplicate_scan_items WHERE scan_id IN (SELECT id FROM duplicate_scans WHERE channel_ref=?)",
-        (channel_ref,),
+        "DELETE FROM duplicate_scan_items WHERE scan_id=?",
+        (scan_id,),
     )
     cur = conn.execute(
-        "DELETE FROM duplicate_scans WHERE channel_ref=?",
-        (channel_ref,),
+        "DELETE FROM duplicate_scans WHERE id=?",
+        (scan_id,),
     )
     conn.commit()
     return cur.rowcount
+
+
+def get_scans_for_channel(channel_ref: str) -> list[dict[str, Any]]:
+    """Return all scans for a channel, ordered newest to oldest."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT * FROM duplicate_scans
+           WHERE channel_ref=?
+           ORDER BY created_at DESC""",
+        (channel_ref,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def insert_item(
@@ -194,6 +213,38 @@ def get_latest_scan_for_channel(channel_ref: str) -> dict[str, Any] | None:
         (channel_ref,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def get_last_scanned_message_id(channel_ref: str) -> int:
+    """
+    Return the highest message_id that was successfully scanned in any previous
+    completed scan for this channel. Returns 0 if no prior scan exists.
+    Used to enable incremental (delta) scans.
+    """
+    conn = get_connection()
+    row = conn.execute(
+        """SELECT MAX(last_scanned_message_id) as max_id
+           FROM duplicate_scans
+           WHERE channel_ref=? AND status='done'""",
+        (channel_ref,),
+    ).fetchone()
+    return (row["max_id"] or 0) if row else 0
+
+
+def get_all_known_media_ids_for_channel(channel_ref: str) -> set[int]:
+    """
+    Return all media_ids ever recorded for this channel across all scans.
+    Used by incremental scan to detect cross-scan duplicates.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT DISTINCT dsi.media_id
+           FROM duplicate_scan_items dsi
+           JOIN duplicate_scans ds ON ds.id = dsi.scan_id
+           WHERE ds.channel_ref=? AND ds.status='done'""",
+        (channel_ref,),
+    ).fetchall()
+    return {r["media_id"] for r in rows}
 
 
 def get_all_scans(limit: int = 20) -> list[dict[str, Any]]:

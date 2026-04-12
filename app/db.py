@@ -106,20 +106,21 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 
 CREATE TABLE IF NOT EXISTS duplicate_scans (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_ref      TEXT NOT NULL DEFAULT '',
-    channel_title    TEXT NOT NULL DEFAULT '',
-    dest_id          INTEGER REFERENCES destinations(id),
-    status           TEXT NOT NULL DEFAULT 'pending'
-                     CHECK(status IN ('pending','running','done','failed')),
-    messages_scanned INTEGER DEFAULT 0,
-    total_messages   INTEGER DEFAULT 0,
-    duplicate_groups INTEGER DEFAULT 0,
-    wasted_count     INTEGER DEFAULT 0,
-    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    completed_at     TEXT,
-    report_url       TEXT,
-    error_msg        TEXT
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_ref             TEXT NOT NULL DEFAULT '',
+    channel_title           TEXT NOT NULL DEFAULT '',
+    dest_id                 INTEGER REFERENCES destinations(id),
+    status                  TEXT NOT NULL DEFAULT 'pending'
+                            CHECK(status IN ('pending','running','done','failed')),
+    messages_scanned        INTEGER DEFAULT 0,
+    total_messages          INTEGER DEFAULT 0,
+    duplicate_groups        INTEGER DEFAULT 0,
+    wasted_count            INTEGER DEFAULT 0,
+    last_scanned_message_id INTEGER DEFAULT 0,
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at            TEXT,
+    report_url              TEXT,
+    error_msg               TEXT
 );
 
 CREATE TABLE IF NOT EXISTS duplicate_scan_items (
@@ -224,6 +225,10 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     _migrate_duplicate_scans(conn)
     # delete_scan_jobs: rebuild table if old source_id NOT NULL column exists
     _migrate_delete_scan_jobs(conn)
+    # Add last_scanned_message_id column if missing
+    _add_column_if_missing(conn, "duplicate_scans", "last_scanned_message_id", "INTEGER DEFAULT 0")
+    # Backfill last_scanned_message_id from scan items for existing completed scans
+    _backfill_last_scanned_message_id(conn)
     _seed_missing_settings(conn, {
         "flood_buffer_min_s": "5",
         "flood_buffer_max_s": "10",
@@ -344,6 +349,38 @@ def _migrate_delete_scan_jobs(conn: sqlite3.Connection) -> None:
     except Exception:
         logger.exception("Migration _migrate_delete_scan_jobs failed — skipping")
         conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _backfill_last_scanned_message_id(conn: sqlite3.Connection) -> None:
+    """
+    For existing completed scans that have last_scanned_message_id=0 (or NULL),
+    compute it from the actual scan items already stored in the DB.
+    This is a one-time fix so old scans serve as a valid baseline for
+    future incremental scans.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT ds.id, MAX(dsi.message_id) AS max_id
+            FROM duplicate_scans ds
+            JOIN duplicate_scan_items dsi ON dsi.scan_id = ds.id
+            WHERE ds.status = 'done'
+              AND (ds.last_scanned_message_id IS NULL OR ds.last_scanned_message_id = 0)
+            GROUP BY ds.id
+            """
+        ).fetchall()
+        if rows:
+            for row in rows:
+                conn.execute(
+                    "UPDATE duplicate_scans SET last_scanned_message_id=? WHERE id=?",
+                    (row[1], row[0]),
+                )
+            conn.commit()
+            logger.info(
+                "Migration: backfilled last_scanned_message_id for %d completed scan(s)", len(rows)
+            )
+    except Exception:
+        logger.exception("Migration _backfill_last_scanned_message_id failed — skipping")
 
 
 def _migrate_copied_messages_no_cascade(conn: sqlite3.Connection) -> None:

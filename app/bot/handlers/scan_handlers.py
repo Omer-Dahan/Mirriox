@@ -42,70 +42,92 @@ async def dispatch_scan(bot: TelegramClient, event, uid: int) -> None:
             text, kb = renderer.render_error("יעד לא נמצא", "scan")
             await update_main_message(bot, text, to_telethon(kb))
             return
-        await _start_scan_for_channel(
-            bot, event, uid,
-            channel_ref=dest.channel_ref,
-            channel_title=dest.title or dest.name,
-            dest_id=dest_id,
-        )
+        text, kb = renderer.render_scan_channel_menu(dest.channel_ref, dest.title or dest.name)
+        await update_main_message(bot, text, to_telethon(kb))
+
+    elif action == "menu_ref" and len(parts) >= 3:
+        ref = parts[2]
+        dest = source_repo.get_destination_by_ref(ref)
+        title = dest.title or dest.name if dest else ref
+        text, kb = renderer.render_scan_channel_menu(ref, title)
+        await update_main_message(bot, text, to_telethon(kb))
+
+    elif action == "hist" and len(parts) >= 4:
+        ref = parts[2]
+        page = int(parts[3])
+        text, kb = renderer.render_scan_history(ref, page)
+        await update_main_message(bot, text, to_telethon(kb))
+
+    elif action == "new" and len(parts) >= 3:
+        ref = parts[2]
+        dest = source_repo.get_destination_by_ref(ref)
+        title = dest.title or dest.name if dest else ref
+        dest_id = dest.id if dest else None
+        await _start_scan_for_channel(bot, event, uid, channel_ref=ref, channel_title=title, dest_id=dest_id)
 
     elif action == "view" and len(parts) >= 3:
         scan_id = int(parts[2])
         text, kb = renderer.render_scan_report_by_id(scan_id)
         await update_main_message(bot, text, to_telethon(kb))
 
-    elif action == "confirm_delete" and len(parts) >= 3:
+    elif action == "confirm_delete" and len(parts) >= 5:
+        # scan:confirm_delete:{scan_id}:{page}:{channel_ref}
         scan_id = int(parts[2])
         text, kb = renderer.render_confirm_delete_dupes_by_id(scan_id)
+        
+        # We need to maintain context for back button in history
+        # Let's override the return button manually here
+        page = int(parts[3])
+        ref = parts[4]
+        from telegram import InlineKeyboardMarkup
+        from app.ui.keyboards import _btn, to_telethon as _to_telethon
+        from app.ui import texts
+        kb = InlineKeyboardMarkup([
+            [_btn(texts.BTN_YES_DELETE, f"scan:delete:{scan_id}:{page}:{ref}")],
+            [_btn(texts.BTN_CANCEL, f"scan:hist:{ref}:{page}"),]
+        ])
         await update_main_message(bot, text, to_telethon(kb))
 
     elif action == "delete" and len(parts) >= 3:
         scan_id = int(parts[2])
+        # Can have extra parts but _queue_delete handles only scan_id
         await _queue_delete(bot, event, uid, scan_id)
 
-    elif action == "rescan" and len(parts) >= 3:
+    elif action == "confirm_del_scan" and len(parts) >= 5:
         scan_id = int(parts[2])
-        old = scan_repo.get_scan_by_id(scan_id)
-        if old:
-            await _start_scan_for_channel(
-                bot, event, uid,
-                channel_ref=old["channel_ref"],
-                channel_title=old["channel_title"],
-                dest_id=old.get("dest_id"),
-            )
-        else:
-            text, kb = renderer.render_scan_picker()
-            await update_main_message(bot, text, to_telethon(kb))
+        page = int(parts[3])
+        ref = parts[4]
+        from telegram import InlineKeyboardMarkup
+        from app.ui.keyboards import _btn
+        kb = InlineKeyboardMarkup([
+            [_btn(texts.BTN_CONFIRM_DEL_SCAN, f"scan:del_scan:{scan_id}:{page}:{ref}")],
+            [_btn(texts.BTN_CANCEL, f"scan:hist:{ref}:{page}")],
+        ])
+        await update_main_message(bot, texts.confirm_del_scan_text(), to_telethon(kb))
+
+    elif action == "del_scan" and len(parts) >= 5:
+        scan_id = int(parts[2])
+        page = int(parts[3])
+        ref = parts[4]
+        scan_repo.cancel_scan(scan_id)
+        scan_repo.delete_scan(scan_id)
+        logger.info("Deleted scan #%d for channel %s", scan_id, ref)
+        # Render history page again
+        text, kb = renderer.render_scan_history(ref, page)
+        await update_main_message(bot, text, to_telethon(kb))
+
+    elif action == "stop_hist" and len(parts) >= 5:
+        scan_id = int(parts[2])
+        page = int(parts[3])
+        ref = parts[4]
+        scan_repo.cancel_scan(scan_id)
+        text, kb = renderer.render_scan_history(ref, page)
+        await update_main_message(bot, text, to_telethon(kb))
 
     elif action == "stop" and len(parts) >= 3:
         scan_id = int(parts[2])
         scan_repo.cancel_scan(scan_id)
         text, kb = renderer.render_scan_report_by_id(scan_id)
-        await update_main_message(bot, text, to_telethon(kb))
-
-    elif action == "confirm_reset" and len(parts) >= 3:
-        scan_id = int(parts[2])
-        scan = scan_repo.get_scan_by_id(scan_id)
-        if scan:
-            channel_name = scan.get("channel_title") or scan.get("channel_ref") or "ערוץ"
-            text = (
-                f"⚠️ <b>אפס נתוני סריקה — {texts.esc(channel_name)}</b>\n\n"
-                "פעולה זו תמחק את כל הנתונים מהסריקות הקודמות לערוץ זה.\n"
-                "⚠️ פעולה זו אינה הפיכה!"
-            )
-            kb = keyboards.kb_confirm_reset_scan(scan_id)
-        else:
-            text, kb = renderer.render_scan_picker()
-        await update_main_message(bot, text, to_telethon(kb))
-
-    elif action == "reset" and len(parts) >= 3:
-        scan_id = int(parts[2])
-        scan = scan_repo.get_scan_by_id(scan_id)
-        if scan:
-            scan_repo.cancel_scan(scan_id)
-            deleted = scan_repo.delete_scans_for_channel(scan["channel_ref"])
-            logger.info("Reset: deleted %d scan records for channel %s", deleted, scan["channel_ref"])
-        text, kb = renderer.render_scan_picker()
         await update_main_message(bot, text, to_telethon(kb))
 
 
@@ -121,7 +143,10 @@ async def handle_scan_channel_ref(bot: TelegramClient, event, uid: int) -> None:
         return
 
     _state.get_user_data(uid).pop("awaiting_input", None)
-    await _start_scan_for_channel(bot, event, uid, channel_ref=ref, channel_title=ref, dest_id=None)
+    dest = source_repo.get_destination_by_ref(ref)
+    title = dest.title or dest.name if dest else ref
+    text, kb = renderer.render_scan_channel_menu(ref, title)
+    await update_main_message(bot, text, to_telethon(kb))
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -132,12 +157,12 @@ async def _start_scan_for_channel(
 ) -> None:
     existing = scan_repo.get_latest_scan_for_channel(channel_ref)
     if existing and existing["status"] in ("pending", "running"):
-        text, kb = renderer.render_scan_report_by_id(existing["id"])
+        text, kb = renderer.render_scan_history(channel_ref, 0)
         await update_main_message(bot, text, to_telethon(kb))
         return
 
-    scan_id = scan_repo.create_scan(channel_ref, channel_title, dest_id)
-    text, kb = renderer.render_scan_report_by_id(scan_id)
+    scan_repo.create_scan(channel_ref, channel_title, dest_id)
+    text, kb = renderer.render_scan_history(channel_ref, 0)
     await update_main_message(bot, text, to_telethon(kb))
 
 

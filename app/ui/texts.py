@@ -30,6 +30,13 @@ STATUS_ICONS: dict[str, str] = {
     "waiting_retry": "🔄",
 }
 
+SCAN_STATUS_ICONS: dict[str, str] = {
+    "pending": "⏳",
+    "running": "▶️",
+    "done":    "✅",
+    "failed":  "❌",
+}
+
 MODE_LABELS: dict[str, str] = {
     "all":        "📋 כל ההודעות",
     "date_range": "📅 טווח תאריכים",
@@ -101,12 +108,15 @@ TITLE_CONFIRM_CLEAR   = "⚠️ <b>אישור מחיקת כל המילים</b>"
 TITLE_ERROR           = "❌ <b>שגיאה</b>"
 TITLE_SCAN_REPORT          = "🔍 <b>דוח כפילויות</b>"
 TITLE_SCAN_PICKER          = "🔍 <b>סריקת כפילויות</b>"
+TITLE_SCAN_CHANNEL_MENU    = "🔍 <b>תפריט ערוץ</b>"
 TITLE_CONFIRM_DELETE_DUPES = "⚠️ <b>אישור מחיקת כפילויות</b>"
 BTN_SCAN_DUPES_MENU        = "🔍 סריקת כפילויות"
 BTN_START_SCAN             = "▶️ התחל סריקה"
 BTN_STOP_SCAN              = "⏹ עצור סריקה"
 BTN_RESET_SCAN             = "🗑 אפס נתונים"
 BTN_CONFIRM_RESET          = "✅ כן, אפס"
+BTN_DEL_SCAN               = "🗑 מחיקת סריקה"
+BTN_CONFIRM_DEL_SCAN       = "✅ כן, מחק סריקה"
 
 # ── Main menu ──────────────────────────────────────────────────────────────────
 
@@ -153,10 +163,19 @@ def main_menu_text(
 
 # ── Job list ───────────────────────────────────────────────────────────────────
 
-def jobs_list_text(jobs: list["Job"]) -> str:
-    if not jobs:
+def jobs_list_text(jobs: list["Job"], scans: list[dict] | None = None) -> str:
+    has_jobs = bool(jobs)
+    has_scans = bool(scans)
+    if not has_jobs and not has_scans:
         return f"{TITLE_JOBS}\n\nאין משימות עדיין."
     return f"{TITLE_JOBS}\n\nבחר משימה מהרשימה:"
+
+
+def scan_row_text(scan: dict) -> str:
+    """One-line label for a scan in the unified job list."""
+    icon = SCAN_STATUS_ICONS.get(scan.get("status", ""), "🔍")
+    channel = scan.get("channel_title") or scan.get("channel_ref") or "?"
+    return f"🔍 {channel[:38]} {icon}"
 
 
 # ── Job detail ─────────────────────────────────────────────────────────────────
@@ -454,6 +473,15 @@ def confirm_delete_dupes_text(wasted: int) -> str:
         "ההודעה הישנה ביותר בכל קבוצה תישמר.\n\n"
         "⚠️ פעולה זו אינה הפיכה!"
     )
+
+
+def scan_channel_menu_text(channel_title: str) -> str:
+    return f"{TITLE_SCAN_CHANNEL_MENU} — <b>{esc(channel_title)}</b>\n\nמה ברצונך לעשות?"
+
+
+def confirm_del_scan_text() -> str:
+    return "⚠️ האם ברצונך למחוק סריקה זו?\n\nהפעולה תמחק את כל הנתונים של הסריקה הספציפית הזו."
+
 
 
 def dest_list_text(dests: list["Destination"]) -> str:

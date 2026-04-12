@@ -150,17 +150,19 @@ def _format_size(size_bytes: Optional[int]) -> str:
 
 
 def _build_duplicates_content(
-    groups: list[dict],
+    chunk: list[dict],
     get_items_fn,
     username: Optional[str],
     resolved_id: Optional[int],
+    start_idx: int,
+    total_len: int,
+    next_url: Optional[str],
 ) -> list:
-    """Build Telegraph content nodes for duplicate groups."""
+    """Build Telegraph content nodes for a chunk of duplicate groups."""
     nodes: list = []
-    nodes.append({"tag": "p", "children": [f"סה\"כ קבוצות: {len(groups)}"]})
+    nodes.append({"tag": "p", "children": [f"סה\"כ קבוצות בערוץ: {total_len}"]})
 
-    capped_groups = groups[:_MAX_ITEMS]
-    for idx, group in enumerate(capped_groups, 1):
+    for idx, group in enumerate(chunk, start_idx):
         mime = group.get("mime_type") or "unknown"
         size_str = _format_size(group.get("file_size"))
         count = group["total_count"]
@@ -187,6 +189,12 @@ def _build_duplicates_content(
                 note,
             ]})
 
+    if next_url:
+        nodes.append({"tag": "h4", "children": ["עוד כפילויות..."]})
+        nodes.append({"tag": "p", "children": [
+            {"tag": "a", "attrs": {"href": next_url}, "children": ["לעמוד הבא ⬅️"]}
+        ]})
+
     return nodes
 
 
@@ -197,22 +205,46 @@ def create_duplicates_report_sync(
     username: Optional[str],
     resolved_id: Optional[int],
 ) -> Optional[str]:
-    """Synchronous Telegraph page creation for duplicates report. Returns URL or None."""
+    """Synchronous Telegraph page creation for duplicates report. Returns URL or None.
+    Automatically paginates large duplicate reports into multiple Telegraph pages.
+    """
     if not groups:
         return None
     try:
         token = _get_or_create_token_sync()
-        content = _build_duplicates_content(groups, get_items_fn, username, resolved_id)
-        resp = _post_sync("createPage", {
-            "access_token": token,
-            "title": f"Duplicates #{scan_id}",
-            "content": content,
-            "return_content": False,
-        })
-        if resp.get("ok"):
-            return resp["result"]["url"]
-        logger.warning("Telegraph createPage (duplicates) failed: %s", resp)
-        return None
+        chunk_size = 150
+        chunks = [groups[i:i+chunk_size] for i in range(0, len(groups), chunk_size)]
+        
+        current_url = None
+        for chunk_idx in reversed(range(len(chunks))):
+            chunk = chunks[chunk_idx]
+            start_idx = chunk_idx * chunk_size + 1
+            
+            content = _build_duplicates_content(
+                chunk=chunk,
+                get_items_fn=get_items_fn,
+                username=username,
+                resolved_id=resolved_id,
+                start_idx=start_idx,
+                total_len=len(groups),
+                next_url=current_url,
+            )
+            title = f"Duplicates #{scan_id}" + (f" (Page {chunk_idx + 1})" if len(chunks) > 1 else "")
+            
+            resp = _post_sync("createPage", {
+                "access_token": token,
+                "title": title,
+                "content": content,
+                "return_content": False,
+            })
+            if resp.get("ok"):
+                current_url = resp["result"]["url"]
+            else:
+                logger.warning("Telegraph createPage (duplicates) failed at chunk %d: %s", chunk_idx, resp)
+                # If page 1 fails but page 2 succeeded, we just return page 2 URL.
+                # Though ideally it won't fail.
+
+        return current_url
     except Exception as exc:
         logger.warning("Telegraph duplicates report failed for scan #%d: %s", scan_id, exc)
         return None

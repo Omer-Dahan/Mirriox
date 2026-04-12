@@ -75,7 +75,7 @@ def kb_main_menu() -> InlineKeyboardMarkup:
 
 # ── Jobs ───────────────────────────────────────────────────────────────────────
 
-def kb_job_list(jobs: list["Job"], page: int = 0) -> InlineKeyboardMarkup:
+def kb_job_list(jobs: list["Job"], page: int = 0, scans: list[dict] | None = None) -> InlineKeyboardMarkup:
     page_jobs, total_pages = _paged(jobs, page)
     rows = []
     for job in page_jobs:
@@ -84,6 +84,12 @@ def kb_job_list(jobs: list["Job"], page: int = 0) -> InlineKeyboardMarkup:
         rows.append([_btn(label, f"job:{job.id}:view")])
     if total_pages > 1:
         rows.append(_nav_row("jobs", page, total_pages))
+    # Show recent scans below the job list (up to 5 most recent)
+    if scans:
+        rows.append([_btn("── 🔍 סריקות ──", "menu:scan")])
+        for scan in scans[:5]:
+            label = texts.scan_row_text(scan)
+            rows.append([_btn(label, f"scan:view:{scan['id']}")])
     rows.append([_btn(texts.BTN_NEW_JOB, "job:new"), _btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -256,7 +262,44 @@ def kb_scan_cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[_btn(texts.BTN_CANCEL, "menu:scan")]])
 
 
+def kb_scan_channel_menu(channel_ref: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [_btn("דוח סריקות שבוצעו", f"scan:hist:{channel_ref}:0")],
+        [_btn(texts.BTN_START_SCAN, f"scan:new:{channel_ref}")],
+        [_btn(texts.BTN_BACK, "menu:scan")],
+    ])
+
+
+def kb_scan_history(scan_id: int, status: str, has_dupes: bool, report_url: str | None, channel_ref: str, page: int, total: int) -> InlineKeyboardMarkup:
+    rows = []
+    
+    if status in ("running", "pending"):
+        rows.append([
+            _btn(texts.BTN_REFRESH, f"scan:hist:{channel_ref}:{page}"),
+            _btn(texts.BTN_STOP_SCAN, f"scan:stop_hist:{scan_id}:{page}:{channel_ref}"),
+        ])
+    elif status == "done" and has_dupes:
+        rows.append([_btn("מחיקת כפולים", f"scan:confirm_delete:{scan_id}:{page}:{channel_ref}")])
+        if report_url:
+            rows.append([_url_btn("דוח כפולים", report_url)])
+    
+    rows.append([_btn(texts.BTN_DEL_SCAN, f"scan:confirm_del_scan:{scan_id}:{page}:{channel_ref}")])
+
+    # Navigation for history
+    nav_row = []
+    if page < total - 1:
+        nav_row.append(_btn("הבא ➡️", f"scan:hist:{channel_ref}:{page + 1}"))
+    if page > 0:
+        nav_row.append(_btn("⬅️ הקודם", f"scan:hist:{channel_ref}:{page - 1}"))
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append([_btn(texts.BTN_BACK, f"scan:menu_ref:{channel_ref}")])
+    return InlineKeyboardMarkup(rows)
+
+
 def kb_scan_report(scan_id: int, status: str, has_dupes: bool, report_url: str | None = None) -> InlineKeyboardMarkup:
+    # Used primarily by the active jobs viewer
     rows = []
     if status in ("running", "pending"):
         rows.append([
@@ -265,12 +308,9 @@ def kb_scan_report(scan_id: int, status: str, has_dupes: bool, report_url: str |
         ])
     elif status == "done" and has_dupes:
         rows.append([_btn(texts.BTN_DELETE_DUPES, f"scan:confirm_delete:{scan_id}")])
-        rows.append([_btn(texts.BTN_RESCAN, f"scan:rescan:{scan_id}")])
-    elif status == "done":
-        rows.append([_btn(texts.BTN_RESCAN, f"scan:rescan:{scan_id}")])
     elif status == "failed":
-        rows.append([_btn(texts.BTN_START_SCAN, f"scan:rescan:{scan_id}")])
-    rows.append([_btn(texts.BTN_RESET_SCAN, f"scan:confirm_reset:{scan_id}"), _btn(texts.BTN_BACK, "menu:scan")])
+        pass
+    rows.append([_btn(texts.BTN_BACK, "menu:jobs")])
     return InlineKeyboardMarkup(rows)
 
 

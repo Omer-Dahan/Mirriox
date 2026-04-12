@@ -284,6 +284,7 @@ async def _poll_loop(config: Config, engine: CopyEngine, scan_engine: ScanEngine
                     )
                     try:
                         await scan_engine.run_scan(scan_task["scan_id"])
+                        await _send_scan_completion_notification(client, scan_task["scan_id"])
                     except Exception as e:
                         if is_network_error(e):
                             logger.warning(
@@ -309,6 +310,7 @@ async def _poll_loop(config: Config, engine: CopyEngine, scan_engine: ScanEngine
                         del_task["scan_id"],
                         del_task["channel_ref"],
                     )
+                    await _send_delete_completion_notification(client, del_task["id"], del_task["scan_id"])
                     continue
 
                 state_repo.heartbeat()
@@ -492,6 +494,106 @@ async def _send_completion_notification(client: TelegramClient, job_id: int) -> 
     )
 
     await _notify(state_repo.get_setting("main_chat_id"), text, job_id, "completion")
+
+
+async def _send_scan_completion_notification(client: TelegramClient, scan_id: int) -> None:
+    """Send scan result summary to the admin chat after a scan ends."""
+    scan = scan_repo.get_scan_by_id(scan_id)
+    if not scan:
+        return
+
+    status = scan.get("status", "")
+    channel_name = scan.get("channel_title") or scan.get("channel_ref") or "?"
+    scanned = scan.get("messages_scanned", 0)
+    groups = scan.get("duplicate_groups", 0)
+    wasted = scan.get("wasted_count", 0)
+    report_url = scan.get("report_url")
+    error_msg = scan.get("error_msg") or ""
+
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    if status == "done":
+        if groups == 0:
+            text = (
+                f"✅ <b>סריקת כפילויות הושלמה</b>\n\n"
+                f"📡 ערוץ: <b>{_esc(channel_name)}</b>\n"
+                f"📊 נסרקו: <b>{scanned:,}</b> הודעות\n"
+                f"🎉 לא נמצאו כפילויות!"
+            )
+        else:
+            report_line = ""
+            if report_url:
+                report_line = f'\n\n📄 <a href="{report_url}">דוח מפורט עם קישורים</a>'
+            text = (
+                f"✅ <b>סריקת כפילויות הושלמה</b>\n\n"
+                f"📡 ערוץ: <b>{_esc(channel_name)}</b>\n"
+                f"📊 נסרקו: <b>{scanned:,}</b> הודעות\n"
+                f"🔁 קבוצות כפולות: <b>{groups:,}</b>\n"
+                f"🗑 ניתן למחוק: <b>{wasted:,}</b> הודעות"
+                f"{report_line}"
+            )
+    else:
+        text = (
+            f"❌ <b>סריקת כפילויות נכשלה</b>\n\n"
+            f"📡 ערוץ: <b>{_esc(channel_name)}</b>\n"
+            f"💬 שגיאה: {_esc(error_msg[:200])}"
+        )
+
+    chat_id_str = state_repo.get_setting("main_chat_id")
+    if not chat_id_str:
+        return
+    try:
+        chat_id = int(chat_id_str)
+    except (ValueError, TypeError):
+        return
+    from app.bot.bot_main import send_notification
+    await send_notification(chat_id, text)
+    logger.info("Scan #%d: completion notification sent", scan_id)
+
+
+async def _send_delete_completion_notification(
+    client: TelegramClient, delete_job_id: int, scan_id: int
+) -> None:
+    """Send bulk-delete result summary to the admin chat."""
+    scan = scan_repo.get_scan_by_id(scan_id)
+    channel_name = (scan or {}).get("channel_title") or (scan or {}).get("channel_ref") or "?"
+
+    from app.repositories.scan_repo import get_latest_delete_job
+    del_job = get_latest_delete_job(scan_id)
+    if not del_job:
+        return
+
+    del_status = del_job.get("status", "")
+    deleted = del_job.get("deleted_count", 0)
+    error_msg = del_job.get("error_msg") or ""
+
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    if del_status == "done":
+        text = (
+            f"🗑 <b>מחיקת כפילויות הושלמה</b>\n\n"
+            f"📡 ערוץ: <b>{_esc(channel_name)}</b>\n"
+            f"✅ נמחקו: <b>{deleted:,}</b> הודעות"
+        )
+    else:
+        text = (
+            f"❌ <b>מחיקת כפילויות נכשלה</b>\n\n"
+            f"📡 ערוץ: <b>{_esc(channel_name)}</b>\n"
+            f"💬 שגיאה: {_esc(error_msg[:200])}"
+        )
+
+    chat_id_str = state_repo.get_setting("main_chat_id")
+    if not chat_id_str:
+        return
+    try:
+        chat_id = int(chat_id_str)
+    except (ValueError, TypeError):
+        return
+    from app.bot.bot_main import send_notification
+    await send_notification(chat_id, text)
+    logger.info("Delete job #%d: completion notification sent", delete_job_id)
 
 
 async def _check_daily_limit(client: TelegramClient, job_id: int) -> bool:

@@ -26,9 +26,11 @@ def render_main_menu() -> tuple[str, InlineKeyboardMarkup]:
 
 
 def render_job_list(page: int = 0, telegram_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    from app.repositories import job_repo
+    from app.repositories import job_repo, scan_repo
     jobs = job_repo.get_all(created_by=telegram_id)
-    return texts.jobs_list_text(jobs), keyboards.kb_job_list(jobs, page=page)
+    # Include recent scans (last 10) so they appear in the unified task list
+    scans = scan_repo.get_all_scans(limit=10)
+    return texts.jobs_list_text(jobs, scans), keyboards.kb_job_list(jobs, page=page, scans=scans)
 
 
 def render_job_detail(job_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -110,6 +112,31 @@ def render_scan_picker() -> tuple[str, InlineKeyboardMarkup]:
     return texts.scan_picker_text(dests), keyboards.kb_scan_picker(dests)
 
 
+def render_scan_channel_menu(channel_ref: str, channel_title: str) -> tuple[str, InlineKeyboardMarkup]:
+    return texts.scan_channel_menu_text(channel_title), keyboards.kb_scan_channel_menu(channel_ref)
+
+
+def render_scan_history(channel_ref: str, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    from app.repositories import scan_repo
+    scans = scan_repo.get_scans_for_channel(channel_ref)
+    if not scans:
+        return texts.error_text("אין סריקות קודמות לערוץ זה"), keyboards.kb_scan_channel_menu(channel_ref)
+    
+    # if page out of bounds
+    if page >= len(scans):
+        page = len(scans) - 1
+    elif page < 0:
+        page = 0
+
+    scan = scans[page]
+    channel_name = scan.get("channel_title") or scan.get("channel_ref") or "—"
+    has_dupes = (scan.get("duplicate_groups") or 0) > 0
+    return (
+        texts.scan_report_text(scan, channel_name),
+        keyboards.kb_scan_history(scan["id"], scan["status"], has_dupes, scan.get("report_url"), channel_ref, page, len(scans)),
+    )
+
+
 def render_scan_report_by_id(scan_id: int) -> tuple[str, InlineKeyboardMarkup]:
     from app.repositories import scan_repo
     scan = scan_repo.get_scan_by_id(scan_id)
@@ -117,6 +144,8 @@ def render_scan_report_by_id(scan_id: int) -> tuple[str, InlineKeyboardMarkup]:
         return texts.error_text("סריקה לא נמצאה"), keyboards.kb_error_back("scan")
     channel_name = scan.get("channel_title") or scan.get("channel_ref") or "—"
     has_dupes = (scan.get("duplicate_groups") or 0) > 0
+    
+    # Render with the old report view (for jobs list/active view)
     return (
         texts.scan_report_text(scan, channel_name),
         keyboards.kb_scan_report(scan_id, scan["status"], has_dupes, scan.get("report_url")),

@@ -34,7 +34,16 @@ class ScanEngine:
     # -----------------------------------------------------------------------
 
     async def run_scan(self, scan_id: int) -> None:
-        """Iterate all messages in the channel and record media IDs for dedup analysis."""
+        """Iterate messages in the channel and record media IDs for dedup analysis.
+
+        On the first scan (no prior completed scans for the channel), all messages
+        are fetched from the beginning of the channel history.
+
+        On subsequent scans, only messages added after the last_scanned_message_id
+        are fetched from Telegram (incremental / delta mode). New items are
+        cross-checked against all media_ids from previous scans so that
+        cross-scan duplicates are detected without re-fetching old messages.
+        """
         scan_data = scan_repo.get_scan_by_id(scan_id)
         if scan_data is None:
             logger.error("Scan #%d not found in DB", scan_id)
@@ -52,6 +61,27 @@ class ScanEngine:
                 scan_repo.fail_scan(scan_id, f"לא ניתן לפתור ערוץ: {channel_ref}")
                 return
 
+            # Determine starting point for incremental scan
+            last_message_id = scan_repo.get_last_scanned_message_id(channel_ref)
+            is_incremental = last_message_id > 0
+
+            if is_incremental:
+                logger.info(
+                    "Scan #%d: incremental mode — scanning only messages after #%d",
+                    scan_id, last_message_id,
+                )
+                # Load all previously known media_ids for cross-scan duplicate detection.
+                # This allows detecting "old original + new copy" duplicates without
+                # re-scanning the entire channel.
+                known_media_ids: set[int] = scan_repo.get_all_known_media_ids_for_channel(channel_ref)
+                logger.info(
+                    "Scan #%d: loaded %d known media_ids from previous scans",
+                    scan_id, len(known_media_ids),
+                )
+            else:
+                # Full scan: no prior data; start fresh
+                known_media_ids = set()
+
             total = await self._get_total_messages(entity)
             scan_repo.update_progress(scan_id, 0, total)
 
@@ -59,7 +89,12 @@ class ScanEngine:
             from app.db import get_connection
             conn = get_connection()
 
-            iter_obj = self._client.iter_messages(entity, reverse=True)
+            # Use min_id for incremental scan to only fetch new messages
+            iter_kwargs: dict = {"reverse": True}
+            if is_incremental:
+                iter_kwargs["min_id"] = last_message_id
+
+            iter_obj = self._client.iter_messages(entity, **iter_kwargs)
             while True:
                 try:
                     msg = await iter_obj.__anext__()
@@ -91,15 +126,26 @@ class ScanEngine:
                     continue
 
                 msg_date = msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else ""
-                scan_repo.insert_item(
-                    scan_id=scan_id,
-                    message_id=msg.id,
-                    media_id=media_id,
-                    media_type=media_type,
-                    file_size=file_size,
-                    mime_type=mime_type,
-                    msg_date=msg_date,
-                )
+
+                import sqlite3
+                try:
+                    scan_repo.insert_item(
+                        scan_id=scan_id,
+                        message_id=msg.id,
+                        media_id=media_id,
+                        media_type=media_type,
+                        file_size=file_size,
+                        mime_type=mime_type,
+                        msg_date=msg_date,
+                    )
+                except sqlite3.IntegrityError:
+                    logger.warning("Scan #%d deleted mid-run, aborting", scan_id)
+                    scan_repo.fail_scan(scan_id, "סריקה נמחקה במהלך הפעולה")
+                    break
+
+                # Track media_ids to detect duplicates within this batch and
+                # (in incremental mode) against previously scanned data.
+                known_media_ids.add(media_id)
 
                 scanned += 1
                 await asyncio.sleep(_MSG_SLEEP_S)
@@ -114,6 +160,7 @@ class ScanEngine:
             conn.commit()
             scan_repo.update_progress(scan_id, scanned, total)
 
+            # Compute duplicate groups across ALL scans for this channel
             groups = scan_repo.get_duplicate_groups(scan_id)
             wasted = sum(g["total_count"] - 1 for g in groups)
 
@@ -123,8 +170,8 @@ class ScanEngine:
 
             scan_repo.finish_scan(scan_id, len(groups), wasted, report_url)
             logger.info(
-                "Scan #%d done: scanned=%d groups=%d wasted=%d",
-                scan_id, scanned, len(groups), wasted,
+                "Scan #%d done: scanned=%d groups=%d wasted=%d incremental=%s",
+                scan_id, scanned, len(groups), wasted, is_incremental,
             )
 
         except asyncio.CancelledError:
