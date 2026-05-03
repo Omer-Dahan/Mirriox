@@ -89,8 +89,13 @@ async def _async_run(config: Config) -> None:
     state_repo.set_worker_status("idle")
     logger.info("Worker ready. Polling for jobs every %ds...", config.WORKER_POLL_INTERVAL_S)
 
-    engine = CopyEngine(client)
-    scan_engine = ScanEngine(client)
+    async def _resolve_if_needed() -> None:
+        if _resolve_trigger is not None and _resolve_trigger.is_set():
+            _resolve_trigger.clear()
+            await _resolve_pending_channels(client)
+
+    engine = CopyEngine(client, resolve_callback=_resolve_if_needed)
+    scan_engine = ScanEngine(client, resolve_callback=_resolve_if_needed)
 
     try:
         await _poll_loop(config, engine, scan_engine, client)

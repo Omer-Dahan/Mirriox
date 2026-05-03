@@ -155,15 +155,42 @@ async def handle_source_ref(bot: TelegramClient, event, uid: int) -> None:
         if source_repo.get_source_by_ref(ref) is not None:
             text = f"{texts.TITLE_SOURCES}\n\n⚠️ מקור זה כבר קיים ברשימה.\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
             kb = keyboards.kb_source_cancel()
+            await update_main_message(bot, text, to_telethon(kb))
         else:
-            source_repo.add_source(ref, ref)
+            new_src = source_repo.add_source(ref, ref)
             _worker.signal_resolve_now()
+            
+            loading_text = f"{texts.TITLE_SOURCES}\n\n⏳ בודק גישה לערוץ מול השרת..."
+            await update_main_message(bot, loading_text, to_telethon(keyboards.kb_source_cancel()))
+            
+            for _ in range(12):
+                await asyncio.sleep(1)
+                updated = source_repo.get_source_by_id(new_src.id)
+                if updated and (updated.resolved_id is not None or updated.validation_error is not None):
+                    break
+                    
+            updated = source_repo.get_source_by_id(new_src.id)
+            if updated and updated.validation_error:
+                error_msg = updated.validation_error.lower()
+                if "could not find" in error_msg or "cannot find" in error_msg or "find any entity" in error_msg:
+                    source_repo.delete_source(new_src.id)
+                    text = (
+                        f"{texts.TITLE_SOURCES}\n\n"
+                        f"⚠️ <b>הערוץ לא נגיש לבוט</b>\n\n"
+                        f"לא ניתן למצוא את הערוץ או שהבוט אינו חבר בו.\n"
+                        f"אנא ספק <b>קישור הצטרפות</b> (t.me/+) או קישור ציבורי כדי לאפשר לבוט להצטרף:"
+                    )
+                    kb = keyboards.kb_source_cancel()
+                    await update_main_message(bot, text, to_telethon(kb))
+                    return
+
             _state.get_user_data(uid).pop("awaiting_input", None)
             text, kb = renderer.render_source_list()
+            await update_main_message(bot, text, to_telethon(kb))
     except ValidationError as e:
         text = f"{texts.TITLE_SOURCES}\n\n⚠️ {e}\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
         kb = keyboards.kb_source_cancel()
-    await update_main_message(bot, text, to_telethon(kb))
+        await update_main_message(bot, text, to_telethon(kb))
 
 
 async def handle_dest_ref(bot: TelegramClient, event, uid: int) -> None:
@@ -174,12 +201,39 @@ async def handle_dest_ref(bot: TelegramClient, event, uid: int) -> None:
         if source_repo.get_destination_by_ref(ref) is not None:
             text = f"{texts.TITLE_DESTINATIONS}\n\n⚠️ יעד זה כבר קיים ברשימה.\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
             kb = keyboards.kb_dest_cancel()
+            await update_main_message(bot, text, to_telethon(kb))
         else:
-            source_repo.add_destination(ref, ref)
+            new_dst = source_repo.add_destination(ref, ref)
             _worker.signal_resolve_now()
+            
+            loading_text = f"{texts.TITLE_DESTINATIONS}\n\n⏳ בודק גישה לערוץ מול השרת..."
+            await update_main_message(bot, loading_text, to_telethon(keyboards.kb_dest_cancel()))
+            
+            for _ in range(12):
+                await asyncio.sleep(1)
+                updated = source_repo.get_destination_by_id(new_dst.id)
+                if updated and (updated.resolved_id is not None or updated.validation_error is not None):
+                    break
+                    
+            updated = source_repo.get_destination_by_id(new_dst.id)
+            if updated and updated.validation_error:
+                error_msg = updated.validation_error.lower()
+                if "could not find" in error_msg or "cannot find" in error_msg or "find any entity" in error_msg:
+                    source_repo.delete_destination(new_dst.id)
+                    text = (
+                        f"{texts.TITLE_DESTINATIONS}\n\n"
+                        f"⚠️ <b>הערוץ לא נגיש לבוט</b>\n\n"
+                        f"לא ניתן למצוא את הערוץ או שהבוט אינו חבר בו.\n"
+                        f"אנא ספק <b>קישור הצטרפות</b> (t.me/+) או קישור ציבורי כדי לאפשר לבוט להצטרף:"
+                    )
+                    kb = keyboards.kb_dest_cancel()
+                    await update_main_message(bot, text, to_telethon(kb))
+                    return
+
             _state.get_user_data(uid).pop("awaiting_input", None)
             text, kb = renderer.render_dest_list()
+            await update_main_message(bot, text, to_telethon(kb))
     except ValidationError as e:
         text = f"{texts.TITLE_DESTINATIONS}\n\n⚠️ {e}\n\nהזן @username, מזהה מספרי, או קישור t.me/:"
         kb = keyboards.kb_dest_cancel()
-    await update_main_message(bot, text, to_telethon(kb))
+        await update_main_message(bot, text, to_telethon(kb))

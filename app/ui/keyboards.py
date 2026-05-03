@@ -75,7 +75,7 @@ def kb_main_menu() -> InlineKeyboardMarkup:
 
 # ── Jobs ───────────────────────────────────────────────────────────────────────
 
-def kb_job_list(jobs: list["Job"], page: int = 0, scans: list[dict] | None = None) -> InlineKeyboardMarkup:
+def kb_job_list(jobs: list["Job"], page: int = 0) -> InlineKeyboardMarkup:
     page_jobs, total_pages = _paged(jobs, page)
     rows = []
     for job in page_jobs:
@@ -84,12 +84,6 @@ def kb_job_list(jobs: list["Job"], page: int = 0, scans: list[dict] | None = Non
         rows.append([_btn(label, f"job:{job.id}:view")])
     if total_pages > 1:
         rows.append(_nav_row("jobs", page, total_pages))
-    # Show recent scans below the job list (up to 5 most recent)
-    if scans:
-        rows.append([_btn("── 🔍 סריקות ──", "menu:scan")])
-        for scan in scans[:5]:
-            label = texts.scan_row_text(scan)
-            rows.append([_btn(label, f"scan:view:{scan['id']}")])
     rows.append([_btn(texts.BTN_NEW_JOB, "job:new"), _btn(texts.BTN_MAIN_MENU, "menu:main")])
     return InlineKeyboardMarkup(rows)
 

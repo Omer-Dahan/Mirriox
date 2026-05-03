@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable, Awaitable, Optional
 
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
@@ -26,8 +26,9 @@ _PROGRESS_EVERY    = 10    # update DB progress every N messages
 
 
 class ScanEngine:
-    def __init__(self, client: TelegramClient) -> None:
+    def __init__(self, client: TelegramClient, resolve_callback: Optional[Callable[[], Awaitable[None]]] = None) -> None:
         self._client = client
+        self._resolve_callback = resolve_callback
 
     # -----------------------------------------------------------------------
     # Public entry points
@@ -111,6 +112,8 @@ class ScanEngine:
                     await asyncio.sleep(_MSG_SLEEP_S)
                     if scanned % _PROGRESS_EVERY == 0:
                         scan_repo.update_progress(scan_id, scanned, total)
+                        if self._resolve_callback:
+                            await self._resolve_callback()
                     if scanned % _BATCH_EVERY == 0:
                         await asyncio.sleep(_BATCH_SLEEP_S)
                     continue
@@ -121,6 +124,8 @@ class ScanEngine:
                     await asyncio.sleep(_MSG_SLEEP_S)
                     if scanned % _PROGRESS_EVERY == 0:
                         scan_repo.update_progress(scan_id, scanned, total)
+                        if self._resolve_callback:
+                            await self._resolve_callback()
                     if scanned % _BATCH_EVERY == 0:
                         await asyncio.sleep(_BATCH_SLEEP_S)
                     continue
@@ -152,6 +157,8 @@ class ScanEngine:
                 if scanned % _PROGRESS_EVERY == 0:
                     conn.commit()
                     scan_repo.update_progress(scan_id, scanned, total)
+                    if self._resolve_callback:
+                        await self._resolve_callback()
                 if scanned % _BATCH_EVERY == 0:
                     conn.commit()
                     await asyncio.sleep(_BATCH_SLEEP_S)
@@ -216,6 +223,8 @@ class ScanEngine:
                     )
                 except Exception as exc:
                     logger.warning("Delete job #%d: batch error: %s", delete_job_id, exc)
+                if self._resolve_callback:
+                    await self._resolve_callback()
                 await asyncio.sleep(_DELETE_SLEEP_S)
 
             scan_repo.finish_delete_job(delete_job_id, total_deleted)

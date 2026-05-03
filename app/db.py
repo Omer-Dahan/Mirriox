@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE TABLE IF NOT EXISTS copied_messages (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id            INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    job_id            INTEGER NOT NULL,
     source_message_id INTEGER NOT NULL,
     dest_message_id   INTEGER,
     status            TEXT NOT NULL CHECK(status IN ('copied','skipped','failed')),
@@ -201,7 +201,7 @@ def init_schema() -> None:
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
     """Add columns that were introduced after initial schema. Safe to re-run."""
-    _migrate_copied_messages_no_cascade(conn)
+    _migrate_copied_messages_remove_fk(conn)
     _add_column_if_missing(conn, "sources",       "validation_error",   "TEXT")
     _add_column_if_missing(conn, "destinations",  "validation_error",   "TEXT")
     _add_column_if_missing(conn, "jobs",          "content_types",      "TEXT DEFAULT 'text,image,video'")
@@ -383,13 +383,13 @@ def _backfill_last_scanned_message_id(conn: sqlite3.Connection) -> None:
         logger.exception("Migration _backfill_last_scanned_message_id failed — skipping")
 
 
-def _migrate_copied_messages_no_cascade(conn: sqlite3.Connection) -> None:
-    """Remove ON DELETE CASCADE from copied_messages so deleting a job keeps its stats."""
+def _migrate_copied_messages_remove_fk(conn: sqlite3.Connection) -> None:
+    """Remove FK constraint from copied_messages so deleting a job keeps its stats."""
     try:
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='copied_messages'"
         ).fetchone()
-        if not row or "ON DELETE CASCADE" not in (row[0] or ""):
+        if not row or "REFERENCES jobs(id)" not in (row[0] or ""):
             return  # Already migrated or table doesn't exist yet
 
         conn.execute("PRAGMA foreign_keys=OFF")
@@ -397,7 +397,7 @@ def _migrate_copied_messages_no_cascade(conn: sqlite3.Connection) -> None:
         conn.execute("""
             CREATE TABLE copied_messages_v2 (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id            INTEGER NOT NULL REFERENCES jobs(id),
+                job_id            INTEGER NOT NULL,
                 source_message_id INTEGER NOT NULL,
                 dest_message_id   INTEGER,
                 status            TEXT NOT NULL CHECK(status IN ('copied','skipped','failed')),
@@ -413,9 +413,9 @@ def _migrate_copied_messages_no_cascade(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_copied_src_id ON copied_messages(job_id, source_message_id)")
         conn.commit()
         conn.execute("PRAGMA foreign_keys=ON")
-        logger.info("Migration: removed ON DELETE CASCADE from copied_messages")
+        logger.info("Migration: removed FK from copied_messages")
     except Exception:
-        logger.exception("Migration _migrate_copied_messages_no_cascade failed — skipping")
+        logger.exception("Migration _migrate_copied_messages_remove_fk failed — skipping")
         conn.execute("PRAGMA foreign_keys=ON")
 
 

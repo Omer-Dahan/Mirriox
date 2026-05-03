@@ -128,10 +128,17 @@ def main_menu_text(
 ) -> str:
     ws_label = WORKER_STATUS_LABELS.get(worker_status, worker_status)
     if active_job:
+        eta_str = ""
+        if active_job.total_messages > 0:
+            rem = max(0, active_job.total_messages - (active_job.copied_count + active_job.skipped_count + active_job.failed_count))
+            if rem > 0 and active_job.status in ("running", "pending", "waiting_retry"):
+                eta_sec = _estimate_copy_time(rem)
+                eta_str = f" | משוער לסיום: {_format_eta(eta_sec)}"
+
         job_line = (
             f"📋 משימה פעילה: <b>{esc(active_job.name)}</b> "
             f"[{STATUS_LABELS.get(active_job.status, active_job.status)}]\n"
-            f"   הועתקו: {active_job.copied_count} | דולגו: {active_job.skipped_count}"
+            f"   הועתקו: {active_job.copied_count} | דולגו: {active_job.skipped_count}{eta_str}"
         )
     else:
         job_line = "אין משימה פעילה כרגע"
@@ -142,8 +149,16 @@ def main_menu_text(
         c = active_scan.get("messages_scanned", 0)
         t = active_scan.get("total_messages", 0)
         pct = f"({int(c/t*100)}%) " if t else ""
+        
+        eta_str = ""
+        if t > 0:
+            rem = max(0, t - c)
+            if rem > 0 and active_scan.get("status") in ("running", "pending"):
+                eta_sec = _estimate_scan_time(rem)
+                eta_str = f"\n   ⏱ זמן משוער: {_format_eta(eta_sec)}"
+
         title = active_scan.get("channel_title") or active_scan.get("channel_ref") or "?"
-        scan_line = f"\n\n🔍 כפילויות: {st} <b>{pct}{c:,}</b> הודעות ({esc(title)})"
+        scan_line = f"\n\n🔍 כפילויות: {st} <b>{pct}{c:,}</b> מתוך <b>{t:,}</b> הודעות ({esc(title)}){eta_str}"
 
     delete_line = ""
     if active_delete_job:
@@ -163,10 +178,9 @@ def main_menu_text(
 
 # ── Job list ───────────────────────────────────────────────────────────────────
 
-def jobs_list_text(jobs: list["Job"], scans: list[dict] | None = None) -> str:
+def jobs_list_text(jobs: list["Job"]) -> str:
     has_jobs = bool(jobs)
-    has_scans = bool(scans)
-    if not has_jobs and not has_scans:
+    if not has_jobs:
         return f"{TITLE_JOBS}\n\nאין משימות עדיין."
     return f"{TITLE_JOBS}\n\nבחר משימה מהרשימה:"
 
@@ -225,6 +239,13 @@ def job_detail_text(
     if job.report_url:
         report_line = f"\n\n📋 <a href=\"{job.report_url}\">דוח שגיאות / דילוגים</a>"
 
+    eta_str = ""
+    if job.total_messages > 0:
+        rem = max(0, job.total_messages - (job.copied_count + job.skipped_count + job.failed_count))
+        if rem > 0 and job.status in ("running", "pending", "waiting_retry", "paused"):
+            eta_sec = _estimate_copy_time(rem)
+            eta_str = f"\n⏱ זמן משוער לסיום (אופטימלי): {_format_eta(eta_sec)}"
+
     return (
         f"{status_label} {esc(job.name)}\n"
         f"\n"
@@ -236,7 +257,7 @@ def job_detail_text(
         f"מצב: {mode_label}{params_line}\n"
         f"תוכן: {ct_str}\n"
         f"סינון מילים: {filter_str}\n"
-        f"סטטוס: {status_label}{queue_line}"
+        f"סטטוס: {status_label}{queue_line}{eta_str}"
         f"\n"
         f"\nתוצאות:\n"
         f"הועתקו: {job.copied_count}\n"
@@ -433,11 +454,20 @@ def scan_report_text(scan: dict, channel_name: str) -> str:
     if status == "running":
         pct = int(scanned / total * 100) if total else 0
         bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+        
+        eta_str = ""
+        if total > 0:
+            rem = max(0, total - scanned)
+            if rem > 0:
+                eta_sec = _estimate_scan_time(rem)
+                eta_str = f"⏱ זמן משוער לסיום (אופטימלי): {_format_eta(eta_sec)}\n\n"
+
         return (
             header
             + f"▶️ סורק...\n"
             + f"[{bar}] {pct}%\n"
             + f"{scanned:,} / {total:,} הודעות\n\n"
+            + eta_str
             + "לחץ 🔄 לעדכון"
         )
 
@@ -660,3 +690,47 @@ def _fmt_dt(dt_str: str | None) -> str:
         return dt.astimezone(_IL).strftime("%d/%m/%Y %H:%M")
     except Exception:
         return dt_str[:16]
+
+
+# ── ETA Utilities ──────────────────────────────────────────────────────────────
+
+def _format_eta(seconds: float) -> str:
+    if seconds <= 0:
+        return "מחשב..."
+    minutes = int(seconds / 60)
+    if minutes < 1:
+        return "פחות מדקה"
+    if minutes < 60:
+        return f"כ-{minutes} דקות"
+    hours = minutes // 60
+    mins = minutes % 60
+    if hours < 24:
+        return f"כ-{hours} שעות ו-{mins} דקות"
+    days = hours // 24
+    hrs = hours % 24
+    return f"כ-{days} ימים ו-{hrs} שעות"
+
+
+def _estimate_copy_time(remaining_msgs: int) -> float:
+    from app.repositories import state_repo
+    settings = state_repo.get_settings_dict()
+    min_ms = int(settings.get("min_delay_ms", 2000))
+    max_ms = int(settings.get("max_delay_ms", 5000))
+    batch_min = int(settings.get("batch_size_min", 50))
+    batch_max = int(settings.get("batch_size_max", 100))
+    pause_min = int(settings.get("batch_pause_min_s", 60))
+    pause_max = int(settings.get("batch_pause_max_s", 120))
+    
+    avg_delay_s = (min_ms + max_ms) / 2000.0
+    avg_batch = (batch_min + batch_max) / 2.0
+    avg_pause = (pause_min + pause_max) / 2.0
+    
+    sec_per_msg = avg_delay_s + (avg_pause / avg_batch)
+    return remaining_msgs * sec_per_msg
+
+
+def _estimate_scan_time(remaining_msgs: int) -> float:
+    # Scan fetches ~100 messages quickly, but uses _MSG_SLEEP_S (0.5s) per message 
+    # and _BATCH_SLEEP_S (10s) every _BATCH_EVERY (50) messages.
+    # So avg time per message is ~0.7 seconds.
+    return remaining_msgs * 0.7

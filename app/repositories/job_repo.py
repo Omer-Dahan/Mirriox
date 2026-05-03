@@ -108,7 +108,12 @@ def get_active_job() -> Optional[Job]:
     """Return any job that is currently in an active state."""
     conn = db.get_connection()
     row = conn.execute(
-        "SELECT * FROM jobs WHERE status IN ('pending','running','waiting_retry') LIMIT 1"
+        """SELECT * FROM jobs 
+           WHERE status IN ('pending','running','waiting_retry') 
+           ORDER BY 
+               CASE status WHEN 'running' THEN 1 WHEN 'waiting_retry' THEN 2 WHEN 'pending' THEN 3 END ASC, 
+               COALESCE(started_at, submitted_at, created_at) ASC 
+           LIMIT 1"""
     ).fetchone()
     return Job.from_row(row) if row else None
 
@@ -360,9 +365,14 @@ def record_copied_message(
 ) -> None:
     conn = db.get_connection()
     conn.execute(
-        """INSERT OR IGNORE INTO copied_messages
+        """INSERT INTO copied_messages
            (job_id, source_message_id, dest_message_id, status, skip_reason)
-           VALUES (?,?,?,?,?)""",
+           VALUES (?,?,?,?,?)
+           ON CONFLICT(job_id, source_message_id) DO UPDATE SET
+               dest_message_id = excluded.dest_message_id,
+               status = excluded.status,
+               skip_reason = excluded.skip_reason,
+               processed_at = datetime('now')""",
         (job_id, source_message_id, dest_message_id, status, skip_reason),
     )
     conn.commit()

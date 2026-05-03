@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import random
 from datetime import datetime
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, Callable, Awaitable
 
 from telethon import TelegramClient
 from telethon.errors import (
@@ -30,9 +30,10 @@ logger = logging.getLogger(__name__)
 class CopyEngine:
     """Executes a copy job using the provided Telethon client."""
 
-    def __init__(self, client: TelegramClient) -> None:
+    def __init__(self, client: TelegramClient, resolve_callback: Optional[Callable[[], Awaitable[None]]] = None) -> None:
         self._client = client
         self._rate_limiter = RateLimiter()
+        self._resolve_callback = resolve_callback
 
     async def run_job(self, job: Job) -> None:
         from app.repositories import state_repo
@@ -352,6 +353,8 @@ class CopyEngine:
                         _msgs_since_pause_check += 1
                         if _msgs_since_pause_check >= 25:
                             _msgs_since_pause_check = 0
+                            if self._resolve_callback:
+                                await self._resolve_callback()
                             if job_repo.is_paused(job.id):
                                 logger.info("Job #%d: pause requested — stopping at msg #%d", job.id, msg.id)
                                 job_repo.update_progress(job.id, copied, skipped, failed, msg.id)

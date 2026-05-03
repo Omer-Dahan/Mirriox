@@ -26,11 +26,9 @@ def render_main_menu() -> tuple[str, InlineKeyboardMarkup]:
 
 
 def render_job_list(page: int = 0, telegram_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    from app.repositories import job_repo, scan_repo
+    from app.repositories import job_repo
     jobs = job_repo.get_all(created_by=telegram_id)
-    # Include recent scans (last 10) so they appear in the unified task list
-    scans = scan_repo.get_all_scans(limit=10)
-    return texts.jobs_list_text(jobs, scans), keyboards.kb_job_list(jobs, page=page, scans=scans)
+    return texts.jobs_list_text(jobs), keyboards.kb_job_list(jobs, page=page)
 
 
 def render_job_detail(job_id: int) -> tuple[str, InlineKeyboardMarkup]:
